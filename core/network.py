@@ -294,3 +294,5 @@ def calculate_network_info(
         return None
 
     return None
+
+# Scope ID normalization and zone index stripping
