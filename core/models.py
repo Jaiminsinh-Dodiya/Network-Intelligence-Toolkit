@@ -158,6 +158,8 @@ class InterfaceInfo:
 
 @dataclass
 
+# Enriched network math properties
+
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
     system: SystemInfo
