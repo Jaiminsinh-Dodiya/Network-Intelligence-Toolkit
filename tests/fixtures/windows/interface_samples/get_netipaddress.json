@@ -1,0 +1,42 @@
+[
+    {
+        "InterfaceAlias": "Wi-Fi",
+        "InterfaceIndex": 12,
+        "IPAddress": "192.168.43.127",
+        "PrefixLength": 24,
+        "AddressFamily": 2,
+        "Type": "Unicast"
+    },
+    {
+        "InterfaceAlias": "Wi-Fi",
+        "InterfaceIndex": 12,
+        "IPAddress": "fe80::1045:e223:68b2:a491",
+        "PrefixLength": 64,
+        "AddressFamily": 23,
+        "Type": "Unicast"
+    },
+    {
+        "InterfaceAlias": "Ethernet",
+        "InterfaceIndex": 8,
+        "IPAddress": "169.254.20.10",
+        "PrefixLength": 16,
+        "AddressFamily": 2,
+        "Type": "Unicast"
+    },
+    {
+        "InterfaceAlias": "Loopback Pseudo-Interface 1",
+        "InterfaceIndex": 1,
+        "IPAddress": "127.0.0.1",
+        "PrefixLength": 8,
+        "AddressFamily": 2,
+        "Type": "Unicast"
+    },
+    {
+        "InterfaceAlias": "Loopback Pseudo-Interface 1",
+        "InterfaceIndex": 1,
+        "IPAddress": "::1",
+        "PrefixLength": 128,
+        "AddressFamily": 23,
+        "Type": "Unicast"
+    }
+]
