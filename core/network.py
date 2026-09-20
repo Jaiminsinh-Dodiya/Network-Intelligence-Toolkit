@@ -157,4 +157,140 @@ def calculate_ipv4_network(
         is_prefix_known=True,
     )
 
-# CIDR netmask utilities and prefix lookup tables
+
+def calculate_ipv6_network(
+    address_str: str,
+    prefix: int | None = None,
+    interface_name: str = "",
+) -> NetworkInfo:
+    """Calculate IPv6 network boundaries and address characteristics.
+
+    IPv6 does not use broadcast addresses (multicast and anycast are used instead).
+    Special prefix semantics:
+        /128: Host address / loopback. Total=1, Usable=1, First=Last=Address.
+        /127: Point-to-point link (RFC 6164). Total=2, Usable=2.
+        < 127: Subnets (e.g. /64, /56, /48).
+    When prefix is unavailable (None), does NOT silently assume /64.
+    Reports is_prefix_known=False, prefix_length=None, network=None.
+    """
+    clean_addr = normalize_ip_string(address_str)
+    if "/" in clean_addr:
+        addr_part, slash_prefix = clean_addr.split("/", 1)
+        clean_addr = addr_part
+        if prefix is None:
+            try:
+                prefix = int(slash_prefix)
+            except ValueError:
+                prefix = None
+
+    if prefix is None:
+        ip = ipaddress.IPv6Address(clean_addr)
+        scope = classify_address_scope(ip)
+        return NetworkInfo(
+            interface=interface_name,
+            address=str(ip),
+            cidr=str(ip),
+            network=None,
+            prefix_length=None,
+            netmask=None,
+            broadcast=None,
+            first_host=None,
+            last_host=None,
+            total_addresses=0,
+            usable_host_count=0,
+            ip_version=6,
+            scope=scope,
+            is_prefix_known=False,
+        )
+
+    iface = ipaddress.IPv6Interface(f"{clean_addr}/{prefix}")
+    net = iface.network
+    prefix_len = net.prefixlen
+    total_addresses = net.num_addresses
+
+    broadcast: str | None = None  # IPv6 has no broadcast address
+
+    if prefix_len == 128:
+        usable_hosts = 1
+        first_host = str(net.network_address)
+        last_host = str(net.network_address)
+    elif prefix_len == 127:
+        # RFC 6164
+        usable_hosts = 2
+        first_host = str(net[0])
+        last_host = str(net[1])
+    else:
+        usable_hosts = total_addresses
+        first_host = str(net[0])
+        last_host = str(net[-1])
+
+    scope = classify_address_scope(iface.ip)
+
+    return NetworkInfo(
+        interface=interface_name,
+        address=str(iface.ip),
+        cidr=f"{iface.ip}/{prefix_len}",
+        network=str(net),
+        prefix_length=prefix_len,
+        netmask=str(net.netmask),
+        broadcast=broadcast,
+        first_host=first_host,
+        last_host=last_host,
+        total_addresses=total_addresses,
+        usable_host_count=usable_hosts,
+        ip_version=6,
+        scope=scope,
+        is_prefix_known=True,
+    )
+
+
+def calculate_network_info(
+    address_str: str,
+    netmask_or_prefix: str | int | None = None,
+    interface_name: str = "",
+) -> NetworkInfo | None:
+    """Safe dispatcher calculating normalized NetworkInfo for IPv4 or IPv6.
+
+    Returns None if input is invalid or malformed without raising exceptions.
+    """
+    if not address_str or not isinstance(address_str, str):
+        return None
+
+    clean_addr = normalize_ip_string(address_str)
+
+    # Determine IP version
+    addr_part = clean_addr.split("/")[0]
+
+    try:
+        ip = ipaddress.ip_address(addr_part)
+    except ValueError:
+        return None
+
+    try:
+        if ip.version == 4:
+            return calculate_ipv4_network(clean_addr, netmask_or_prefix, interface_name)
+        elif ip.version == 6:
+            prefix_val = None
+            if isinstance(netmask_or_prefix, int):
+                prefix_val = netmask_or_prefix
+            elif isinstance(netmask_or_prefix, str) and netmask_or_prefix.strip():
+                stripped = netmask_or_prefix.strip()
+                if stripped.isdigit():
+                    prefix_val = int(stripped)
+                else:
+                    try:
+                        mask_net = ipaddress.IPv6Network(f"::/{stripped}")
+                        prefix_val = mask_net.prefixlen
+                    except Exception:
+                        prefix_val = None
+            elif "/" in clean_addr:
+                try:
+                    prefix_val = int(clean_addr.split("/")[1])
+                except ValueError:
+                    prefix_val = None
+            return calculate_ipv6_network(clean_addr, prefix_val, interface_name)
+    except (ValueError, TypeError, ipaddress.NetmaskValueError) as err:
+        logger.debug("Failed network calculation for '%s': %s", address_str, err)
+        return None
+
+    return None
