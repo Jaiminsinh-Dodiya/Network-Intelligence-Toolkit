@@ -156,3 +156,5 @@ def calculate_ipv4_network(
         scope=scope,
         is_prefix_known=True,
     )
+
+# CIDR netmask utilities and prefix lookup tables
