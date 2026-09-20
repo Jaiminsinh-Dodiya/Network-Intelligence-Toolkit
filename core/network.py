@@ -295,8 +295,70 @@ def calculate_network_info(
 
     return None
 
-# Scope ID normalization and zone index stripping
 
-# RFC 1918, RFC 3927, RFC 4291 reachability scope classification
+def select_default_interface(
+    interfaces: list[InterfaceInfo],
+    default_route_iface: str | None = None,
+) -> InterfaceInfo | None:
+    """Select the primary active network interface according to the Phase 2 contract:
 
-# RFC 3021 31-bit prefix point-to-point host allocation
+    1. Interface associated with the active default route (when provided/resolved).
+    2. Active UP non-loopback interface with a usable (non-link-local) IPv4 address.
+    3. Active UP non-loopback interface with any IP address.
+    4. First non-loopback interface.
+    5. First interface or None.
+    """
+    if not interfaces:
+        return None
+
+    # 1. Default route interface
+    if default_route_iface:
+        for iface in interfaces:
+            if iface.name.lower() == default_route_iface.lower() and iface.is_up:
+                return iface
+        for iface in interfaces:
+            if iface.name.lower() == default_route_iface.lower():
+                return iface
+
+    # 2. Active non-loopback with non-link-local IPv4 (prioritize active traffic and non-virtual adapters)
+    candidates: list[tuple[int, InterfaceInfo]] = []
+    for iface in interfaces:
+        if iface.is_up and not iface.is_loopback:
+            has_usable_ipv4 = False
+            for net in iface.networks:
+                if net.ip_version == 4 and net.scope not in ("LINK_LOCAL", "LOOPBACK"):
+                    has_usable_ipv4 = True
+                    break
+            if not has_usable_ipv4:
+                for ip in iface.ipv4:
+                    clean = ip.split("/")[0]
+                    if not clean.startswith("169.254.") and not clean.startswith("127."):
+                        has_usable_ipv4 = True
+                        break
+
+            if has_usable_ipv4:
+                score = 0
+                lower_name = iface.name.lower()
+                # Deprioritize virtual adapter names
+                if not any(v in lower_name for v in ("virtual", "vbox", "vmware", "hyper-v", "wsl")):
+                    score += 10
+                # Prioritize interfaces with active traffic
+                if iface.rx_bytes > 0 or iface.tx_bytes > 0:
+                    score += 10
+                candidates.append((score, iface))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    # 3. Active non-loopback with any IP
+    for iface in interfaces:
+        if iface.is_up and not iface.is_loopback and (iface.ipv4 or iface.ipv6):
+            return iface
+
+    # 4. Any non-loopback interface
+    for iface in interfaces:
+        if not iface.is_loopback:
+            return iface
+
+    return interfaces[0]
