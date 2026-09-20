@@ -298,3 +298,5 @@ def calculate_network_info(
 # Scope ID normalization and zone index stripping
 
 # RFC 1918, RFC 3927, RFC 4291 reachability scope classification
+
+# RFC 3021 31-bit prefix point-to-point host allocation
