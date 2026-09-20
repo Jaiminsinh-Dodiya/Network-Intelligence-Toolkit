@@ -1,0 +1,67 @@
+# Network Intelligence Toolkit Configuration
+
+application:
+  name: "Network Intelligence Toolkit"
+  version: "1.0.0"
+
+timeouts:
+  command_default_seconds: 5.0
+  powershell_seconds: 8.0
+  ping_seconds: 3.0
+  dns_lookup_seconds: 3.0
+  http_probe_seconds: 4.0
+  tcp_probe_seconds: 4.0
+  tshark_seconds: 15.0
+
+public_ip:
+  timeout_seconds: 3.0
+  providers:
+    ipapi:
+      enabled: true
+      identity_url: "https://ipapi.co/json/"
+      metadata_url_template: "https://ipapi.co/{ip}/json/"
+    ipwhois:
+      enabled: true
+      identity_url: "https://ipwhois.app/json/"
+      metadata_url_template: "https://ipwhois.app/json/{ip}"
+    ipify:
+      enabled: true
+      ipv4_url: "https://api.ipify.org?format=json"
+      ipv6_url: "https://api6.ipify.org?format=json"
+      dual_stack_url: "https://api64.ipify.org?format=json"
+    icanhazip:
+      enabled: true
+      ipv4_url: "https://4.icanhazip.com"
+      ipv6_url: "https://6.icanhazip.com"
+
+connectivity:
+  gateway_ping_count: 2
+  dns_test_hosts:
+    - "one.one.one.one"
+    - "dns.google"
+  http_probe_urls:
+    - "http://connectivitycheck.gstatic.com/generate_204"
+    - "https://one.one.one.one"
+  tcp_probe_port: 443
+
+observation_thresholds:
+  tcp_rst_ratio_warning: 0.15      # > 15% RST packets
+  tcp_retransmit_ratio_warning: 0.05 # > 5% retransmissions
+  interface_drop_warning: 10        # > 10 dropped packets
+  interface_error_warning: 5        # > 5 error packets
+
+observations:
+  enabled: true
+  pcap:
+    retransmission_notice_threshold: 1
+    tcp_reset_notice_threshold: 1
+
+pcap:
+  enabled: true
+  max_file_size_mb: 2048
+  max_packets: 1000000
+  tshark_timeout_seconds: 120
+  max_output_bytes: 52428800
+  packet_sample_limit: 100
+  timeline_interval_seconds: 1.0
+
