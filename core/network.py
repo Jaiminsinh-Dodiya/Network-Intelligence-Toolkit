@@ -296,3 +296,5 @@ def calculate_network_info(
     return None
 
 # Scope ID normalization and zone index stripping
+
+# RFC 1918, RFC 3927, RFC 4291 reachability scope classification
