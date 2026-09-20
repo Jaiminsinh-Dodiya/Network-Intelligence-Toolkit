@@ -748,3 +748,5 @@ if ($pids) {
         except Exception as err:
             logger.debug("psutil socket fallback failed: %s", err)
             return []
+
+# Network math adapter normalization integration

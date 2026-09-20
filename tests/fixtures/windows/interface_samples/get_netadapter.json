@@ -1,0 +1,16 @@
+[
+    {
+        "Name": "Wi-Fi",
+        "InterfaceDescription": "Intel(R) Wi-Fi 6 AX201 160MHz",
+        "Status": "Up",
+        "MacAddress": "00-15-5D-12-34-56",
+        "LinkSpeed": "866.7 Mbps"
+    },
+    {
+        "Name": "Ethernet",
+        "InterfaceDescription": "Realtek PCIe GbE Family Controller",
+        "Status": "Disconnected",
+        "MacAddress": "00-15-5D-65-43-21",
+        "LinkSpeed": "0 bps"
+    }
+]
