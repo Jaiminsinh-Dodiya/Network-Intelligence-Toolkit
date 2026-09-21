@@ -1107,3 +1107,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux policy routing rules and route metrics
 
 # systemd-resolved resolvectl status DNS parser
+
+# NetworkManager nmcli and resolv.conf DNS fallback
