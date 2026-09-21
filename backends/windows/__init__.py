@@ -756,3 +756,5 @@ if ($pids) {
 # Windows route metric prioritization and default route discovery
 
 # Windows DNS client server discovery via Get-DnsClientServerAddress
+
+# Windows DoH detection via Get-DnsClientDohServerAddress
