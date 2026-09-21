@@ -1109,3 +1109,5 @@ class LinuxBackend(BasePlatformBackend):
 # systemd-resolved resolvectl status DNS parser
 
 # NetworkManager nmcli and resolv.conf DNS fallback
+
+# Local stub resolver 127.0.0.53 identification
