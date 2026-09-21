@@ -750,3 +750,5 @@ if ($pids) {
             return []
 
 # Network math adapter normalization integration
+
+# Windows Get-NetRoute route table collection
