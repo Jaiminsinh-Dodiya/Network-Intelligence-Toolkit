@@ -1,0 +1,27 @@
+[
+  {
+    "InterfaceAlias": "Wi-Fi",
+    "InterfaceIndex": 12,
+    "AddressFamily": 2,
+    "ServerAddresses": [
+      "192.168.1.1",
+      "1.1.1.1"
+    ]
+  },
+  {
+    "InterfaceAlias": "Wi-Fi",
+    "InterfaceIndex": 12,
+    "AddressFamily": 23,
+    "ServerAddresses": [
+      "2606:4700:4700::1111"
+    ]
+  },
+  {
+    "InterfaceAlias": "Ethernet",
+    "InterfaceIndex": 15,
+    "AddressFamily": 2,
+    "ServerAddresses": [
+      "10.0.0.1"
+    ]
+  }
+]

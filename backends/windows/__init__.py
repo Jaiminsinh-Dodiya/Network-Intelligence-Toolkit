@@ -750,3 +750,11 @@ if ($pids) {
             return []
 
 # Network math adapter normalization integration
+
+# Windows Get-NetRoute route table collection
+
+# Windows route metric prioritization and default route discovery
+
+# Windows DNS client server discovery via Get-DnsClientServerAddress
+
+# Windows DoH detection via Get-DnsClientDohServerAddress

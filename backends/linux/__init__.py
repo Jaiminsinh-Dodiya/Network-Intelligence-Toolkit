@@ -1101,3 +1101,13 @@ class LinuxBackend(BasePlatformBackend):
             return []
 
 # Linux ip-addr network math normalization integration
+
+# Linux ip -j route parser
+
+# Linux policy routing rules and route metrics
+
+# systemd-resolved resolvectl status DNS parser
+
+# NetworkManager nmcli and resolv.conf DNS fallback
+
+# Local stub resolver 127.0.0.53 identification

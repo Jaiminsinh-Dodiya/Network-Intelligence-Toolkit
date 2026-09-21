@@ -1,0 +1,20 @@
+[
+  {
+    "InterfaceIndex": 12,
+    "InterfaceAlias": "Wi-Fi",
+    "AddressFamily": 2,
+    "InterfaceMetric": 20
+  },
+  {
+    "InterfaceIndex": 15,
+    "InterfaceAlias": "Ethernet",
+    "AddressFamily": 2,
+    "InterfaceMetric": 25
+  },
+  {
+    "InterfaceIndex": 12,
+    "InterfaceAlias": "Wi-Fi",
+    "AddressFamily": 23,
+    "InterfaceMetric": 20
+  }
+]

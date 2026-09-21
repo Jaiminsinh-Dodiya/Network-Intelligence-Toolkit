@@ -157,8 +157,188 @@ class InterfaceInfo:
 
 
 @dataclass
+class RouteEntry:
+    """Individual routing table entry."""
+    destination: str
+    gateway: str | None = None
+    interface: str = ""
+    metric: int | None = None  # Effective metric used for route preference
+    route_metric: int | None = None  # Raw route metric from OS
+    interface_metric: int | None = None  # Interface metric from OS
+    protocol: str | None = None
+    ip_version: int = 4
+    is_default: bool = False
+    prefix_length: int | None = None
+    network: str | None = None
+    scope: str | None = None
+    route_type: str | None = None
+    source: str | None = None
+    state: str | None = None
+    policy_store: str | None = None
 
-# Enriched network math properties
+    def __post_init__(self) -> None:
+        # Determine prefix_length and network from destination if not explicitly provided
+        if not self.network and self.destination:
+            self.network = self.destination
+        if self.prefix_length is None and "/" in self.destination:
+            try:
+                self.prefix_length = int(self.destination.split("/")[1])
+            except ValueError:
+                pass
+        # Calculate effective metric if metric not provided but components are
+        if self.metric is None:
+            if self.route_metric is not None and self.interface_metric is not None:
+                self.metric = self.route_metric + self.interface_metric
+            elif self.route_metric is not None:
+                self.metric = self.route_metric
+        # Determine is_default
+        if self.destination in ("0.0.0.0/0", "default", "::/0"):
+            self.is_default = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class RoutingInfo:
+    """Routing table and default gateway configuration.
+
+    Policy Routing:
+        Detected policy routing rules (e.g. `ip rule`) are preserved as metadata in `rules`.
+        Preferred default route selection uses the lowest metric among parsed default routes.
+        Effective destination-specific kernel route selection is not fully evaluated yet.
+    """
+    ipv4_routes: list[RouteEntry] = field(default_factory=list)
+    ipv6_routes: list[RouteEntry] = field(default_factory=list)
+    default_ipv4: RouteEntry | None = None
+    default_ipv6: RouteEntry | None = None
+    preferred_interface: str | None = None
+    selection_reason: str | None = None
+    rules: list[dict[str, Any]] = field(default_factory=list)
+    # Legacy backward-compatible fields
+    default_gateway: str | None = None
+    default_interface: str | None = None
+    default_gateway_v6: str | None = None
+    default_interface_v6: str | None = None
+    routes: list[RouteEntry] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Synchronize backward-compatible aliases with structured fields
+        if self.default_ipv4:
+            if not self.default_gateway:
+                self.default_gateway = self.default_ipv4.gateway
+            if not self.default_interface:
+                self.default_interface = self.default_ipv4.interface
+            if not self.preferred_interface:
+                self.preferred_interface = self.default_ipv4.interface
+        elif self.default_gateway and not self.default_ipv4:
+            self.default_ipv4 = RouteEntry(
+                destination="0.0.0.0/0",
+                gateway=self.default_gateway,
+                interface=self.default_interface or "",
+                is_default=True,
+                ip_version=4,
+            )
+
+        if self.default_ipv6:
+            if not self.default_gateway_v6:
+                self.default_gateway_v6 = self.default_ipv6.gateway
+            if not self.default_interface_v6:
+                self.default_interface_v6 = self.default_ipv6.interface
+            if not self.preferred_interface:
+                self.preferred_interface = self.default_ipv6.interface
+
+        # Populate combined routes list and specific lists
+        if not self.routes:
+            self.routes = list(self.ipv4_routes) + list(self.ipv6_routes)
+        else:
+            if not self.ipv4_routes and not self.ipv6_routes:
+                for r in self.routes:
+                    if r.ip_version == 4:
+                        self.ipv4_routes.append(r)
+                    else:
+                        self.ipv6_routes.append(r)
+
+    @property
+    def default_route(self) -> RouteEntry | None:
+        """Convenience property for primary default route (IPv4 preferred over IPv6)."""
+        return self.default_ipv4 or self.default_ipv6
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "default_gateway": self.default_gateway,
+            "default_interface": self.default_interface,
+            "default_gateway_v6": self.default_gateway_v6,
+            "default_interface_v6": self.default_interface_v6,
+            "preferred_interface": self.preferred_interface,
+            "selection_reason": self.selection_reason,
+            "default_ipv4": self.default_ipv4.to_dict() if self.default_ipv4 else None,
+            "default_ipv6": self.default_ipv6.to_dict() if self.default_ipv6 else None,
+            "ipv4_routes": [r.to_dict() for r in self.ipv4_routes],
+            "ipv6_routes": [r.to_dict() for r in self.ipv6_routes],
+            "routes": [r.to_dict() for r in self.routes],
+            "rules": self.rules,
+        }
+
+
+@dataclass
+class DnsServer:
+    """Configured DNS resolver."""
+    address: str
+    family: int = 4  # 4 for IPv4, 6 for IPv6
+    protocol: str = "UNKNOWN"  # Strictly UNKNOWN unless proven (e.g. DoH, DoT, UDP)
+    port: int = 53
+    interface: str | None = None
+    source: str | None = None
+    is_primary: bool = False  # True only when explicitly designated by OS as preferred/current; False otherwise
+    role: str = "UPSTREAM_RESOLVER"  # "UPSTREAM_RESOLVER" or "LOCAL_STUB"
+    doh_template: str | None = None
+
+    def __post_init__(self) -> None:
+        if ":" in self.address and self.family == 4:
+            self.family = 6
+        if self.address in ("127.0.0.53", "127.0.0.54"):
+            self.role = "LOCAL_STUB"
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class DnsInfo:
+    """Host DNS configuration."""
+    servers: list[DnsServer] = field(default_factory=list)
+    search_domains: list[str] = field(default_factory=list)
+    domain: str | None = None
+    source: str = "system"
+    status: str = "EMPTY"  # CONFIGURED, EMPTY, PARTIAL, ERROR
+    is_stub: bool = False
+    stub_address: str | None = None
+    upstream_servers: list[DnsServer] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.servers:
+            if self.status == "EMPTY":
+                self.status = "CONFIGURED"
+            for s in self.servers:
+                if s.role == "LOCAL_STUB" or s.address in ("127.0.0.53", "127.0.0.54"):
+                    self.is_stub = True
+                    self.stub_address = s.address
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "servers": [s.to_dict() for s in self.servers],
+            "search_domains": self.search_domains,
+            "domain": self.domain,
+            "source": self.source,
+            "status": self.status,
+            "is_stub": self.is_stub,
+            "stub_address": self.stub_address,
+            "upstream_servers": [s.to_dict() for s in self.upstream_servers],
+        }
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""

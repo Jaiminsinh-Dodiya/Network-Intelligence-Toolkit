@@ -1,0 +1,57 @@
+[
+  {
+    "DestinationPrefix": "0.0.0.0/0",
+    "NextHop": "192.168.1.1",
+    "InterfaceIndex": 12,
+    "InterfaceAlias": "Wi-Fi",
+    "RouteMetric": 10,
+    "Protocol": "NetMgmt",
+    "State": "Alive",
+    "PolicyStore": "ActiveStore",
+    "AddressFamily": 2
+  },
+  {
+    "DestinationPrefix": "0.0.0.0/0",
+    "NextHop": "10.0.0.1",
+    "InterfaceIndex": 15,
+    "InterfaceAlias": "Ethernet",
+    "RouteMetric": 20,
+    "Protocol": "NetMgmt",
+    "State": "Alive",
+    "PolicyStore": "ActiveStore",
+    "AddressFamily": 2
+  },
+  {
+    "DestinationPrefix": "192.168.1.0/24",
+    "NextHop": "0.0.0.0",
+    "InterfaceIndex": 12,
+    "InterfaceAlias": "Wi-Fi",
+    "RouteMetric": 256,
+    "Protocol": "Local",
+    "State": "Alive",
+    "PolicyStore": "ActiveStore",
+    "AddressFamily": 2
+  },
+  {
+    "DestinationPrefix": "::/0",
+    "NextHop": "fe80::1",
+    "InterfaceIndex": 12,
+    "InterfaceAlias": "Wi-Fi",
+    "RouteMetric": 15,
+    "Protocol": "NetMgmt",
+    "State": "Alive",
+    "PolicyStore": "ActiveStore",
+    "AddressFamily": 23
+  },
+  {
+    "DestinationPrefix": "2001:db8:acad::/64",
+    "NextHop": "::",
+    "InterfaceIndex": 12,
+    "InterfaceAlias": "Wi-Fi",
+    "RouteMetric": 256,
+    "Protocol": "Local",
+    "State": "Alive",
+    "PolicyStore": "ActiveStore",
+    "AddressFamily": 23
+  }
+]
