@@ -282,6 +282,63 @@ class RoutingInfo:
 
 
 @dataclass
+class DnsServer:
+    """Configured DNS resolver."""
+    address: str
+    family: int = 4  # 4 for IPv4, 6 for IPv6
+    protocol: str = "UNKNOWN"  # Strictly UNKNOWN unless proven (e.g. DoH, DoT, UDP)
+    port: int = 53
+    interface: str | None = None
+    source: str | None = None
+    is_primary: bool = False  # True only when explicitly designated by OS as preferred/current; False otherwise
+    role: str = "UPSTREAM_RESOLVER"  # "UPSTREAM_RESOLVER" or "LOCAL_STUB"
+    doh_template: str | None = None
+
+    def __post_init__(self) -> None:
+        if ":" in self.address and self.family == 4:
+            self.family = 6
+        if self.address in ("127.0.0.53", "127.0.0.54"):
+            self.role = "LOCAL_STUB"
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class DnsInfo:
+    """Host DNS configuration."""
+    servers: list[DnsServer] = field(default_factory=list)
+    search_domains: list[str] = field(default_factory=list)
+    domain: str | None = None
+    source: str = "system"
+    status: str = "EMPTY"  # CONFIGURED, EMPTY, PARTIAL, ERROR
+    is_stub: bool = False
+    stub_address: str | None = None
+    upstream_servers: list[DnsServer] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.servers:
+            if self.status == "EMPTY":
+                self.status = "CONFIGURED"
+            for s in self.servers:
+                if s.role == "LOCAL_STUB" or s.address in ("127.0.0.53", "127.0.0.54"):
+                    self.is_stub = True
+                    self.stub_address = s.address
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "servers": [s.to_dict() for s in self.servers],
+            "search_domains": self.search_domains,
+            "domain": self.domain,
+            "source": self.source,
+            "status": self.status,
+            "is_stub": self.is_stub,
+            "stub_address": self.stub_address,
+            "upstream_servers": [s.to_dict() for s in self.upstream_servers],
+        }
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
