@@ -754,3 +754,5 @@ if ($pids) {
 # Windows Get-NetRoute route table collection
 
 # Windows route metric prioritization and default route discovery
+
+# Windows DNS client server discovery via Get-DnsClientServerAddress
