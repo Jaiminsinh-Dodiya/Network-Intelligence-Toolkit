@@ -1105,3 +1105,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux ip -j route parser
 
 # Linux policy routing rules and route metrics
+
+# systemd-resolved resolvectl status DNS parser
