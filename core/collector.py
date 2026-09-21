@@ -289,3 +289,5 @@ class CollectorCoordinator:
             collection_errors["observations"] = str(err)
 
         return report
+
+# Routing and DNS coordinator collection pipeline
