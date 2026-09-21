@@ -752,3 +752,5 @@ if ($pids) {
 # Network math adapter normalization integration
 
 # Windows Get-NetRoute route table collection
+
+# Windows route metric prioritization and default route discovery
