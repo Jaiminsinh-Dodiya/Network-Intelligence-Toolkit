@@ -1115,3 +1115,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux DHCP lease discovery via systemd-networkd and dhclient
 
 # Linux wireless telemetry via iw dev link
+
+# Linux nmcli dev wifi fallback parser
