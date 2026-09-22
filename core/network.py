@@ -362,3 +362,202 @@ def select_default_interface(
             return iface
 
     return interfaces[0]
+
+
+def frequency_to_channel(freq_mhz: int) -> int | None:
+    """Map a frequency in MHz to its standard 802.11 channel number.
+
+    Supports 2.4 GHz, 5 GHz, and 6 GHz (Wi-Fi 6E / Wi-Fi 7).
+    Returns None if unmapped or unrecognized.
+    """
+    try:
+        freq = int(freq_mhz)
+    except (ValueError, TypeError):
+        return None
+
+    # 2.4 GHz band (channels 1-13: 2412-2472 MHz; channel 14: 2484 MHz)
+    if 2412 <= freq <= 2472 and (freq - 2407) % 5 == 0:
+        return (freq - 2407) // 5
+    if freq == 2484:
+        return 14
+
+    # 5 GHz band (channels 32-177: 5160-5885 MHz)
+    if 5000 <= freq <= 5900 and (freq - 5000) % 5 == 0:
+        ch = (freq - 5000) // 5
+        if 32 <= ch <= 177:
+            return ch
+
+    # 6 GHz band (Wi-Fi 6E/7: channel 2 = 5935 MHz, channels 1-233 = 5955-7115 MHz)
+    if freq == 5935:
+        return 2
+    if 5955 <= freq <= 7115 and (freq - 5950) % 5 == 0:
+        ch = (freq - 5950) // 5
+        if 1 <= ch <= 233:
+            return ch
+
+    return None
+
+
+def channel_to_frequency(channel: int, band: str | None = None) -> int | None:
+    """Map a channel number to its center frequency in MHz given the frequency band.
+
+    Requires an explicit band string (e.g. '2.4GHz', '5GHz', '6GHz').
+    Returns None if band is None or channel is ambiguous/invalid.
+    """
+    if band is None:
+        # Ambiguous across bands (e.g. Channel 1 in 2.4 GHz vs 6 GHz)
+        return None
+
+    try:
+        ch = int(channel)
+    except (ValueError, TypeError):
+        return None
+
+    b = band.lower().replace(" ", "").replace("-", "")
+
+    if "2.4" in b:
+        if 1 <= ch <= 13:
+            return 2407 + (ch * 5)
+        if ch == 14:
+            return 2484
+        return None
+
+    if "5" in b and "2.4" not in b and "6" not in b:
+        if 32 <= ch <= 177:
+            return 5000 + (ch * 5)
+        return None
+
+    if "6" in b:
+        if ch == 2:
+            return 5935
+        if 1 <= ch <= 233:
+            return 5950 + (ch * 5)
+        return None
+
+    return None
+
+
+def normalize_bssid(bssid_str: str | None) -> str | None:
+    """Normalize a MAC/BSSID string to canonical lowercase colon-delimited format (aa:bb:cc:dd:ee:ff).
+
+    Returns None if input is invalid or missing.
+    """
+    if not bssid_str:
+        return None
+
+    cleaned = bssid_str.strip().lower().replace("-", ":")
+    parts = cleaned.split(":")
+    if len(parts) == 6 and all(len(p) == 2 and all(c in "0123456789abcdef" for c in p) for p in parts):
+        return cleaned
+
+    return None
+
+
+def normalize_wifi_security(auth_str: str | None) -> tuple[str, str | None]:
+    """Classify Wi-Fi security mode into canonical categories:
+    OPEN, WEP, WPA, WPA2, WPA3, WPA2-ENTERPRISE, WPA3-ENTERPRISE, OTHER, UNKNOWN.
+
+    Never maps enterprise modes to WPA2.
+    Returns (security_mode, raw_security).
+    """
+    if not auth_str:
+        return ("UNKNOWN", None)
+
+    raw = auth_str.strip()
+    lower = raw.lower()
+
+    if "wpa3" in lower and ("enterprise" in lower or "802.1x" in lower):
+        return ("WPA3-ENTERPRISE", raw)
+    if "wpa2" in lower and ("enterprise" in lower or "802.1x" in lower):
+        return ("WPA2-ENTERPRISE", raw)
+    if "enterprise" in lower or "802.1x" in lower:
+        return ("OTHER", raw)
+    if "wpa3" in lower:
+        return ("WPA3", raw)
+    if "wpa2" in lower:
+        return ("WPA2", raw)
+    if "wpa" in lower:
+        return ("WPA", raw)
+    if "wep" in lower:
+        return ("WEP", raw)
+    if "open" in lower or lower in ("none", "no authentication"):
+        return ("OPEN", raw)
+    if any(k in lower for k in ("owe", "eap", "psk", "sae")):
+        return ("OTHER", raw)
+
+    return ("UNKNOWN", raw)
+
+
+def normalize_wifi_standard(radio_str: str | None) -> str:
+    """Normalize Wi-Fi radio type / standard string into canonical notation (e.g. 802.11ax, 802.11ac, etc.).
+
+    Strictly returns 'UNKNOWN' unless explicitly exposed by the OS.
+    Never infers standard from SSID, frequency, or bitrate.
+    """
+    if not radio_str:
+        return "UNKNOWN"
+
+    r = radio_str.strip().lower()
+    if "802.11be" in r or "wi-fi 7" in r or "wifi 7" in r:
+        return "802.11be"
+    if "802.11ax" in r or "wi-fi 6" in r or "wifi 6" in r:
+        return "802.11ax"
+    if "802.11ac" in r or "wi-fi 5" in r or "wifi 5" in r:
+        return "802.11ac"
+    if "802.11n" in r or "wi-fi 4" in r or "wifi 4" in r:
+        return "802.11n"
+    if "802.11g" in r:
+        return "802.11g"
+    if "802.11a" in r:
+        return "802.11a"
+    if "802.11b" in r:
+        return "802.11b"
+
+    if r.startswith("802.11"):
+        return radio_str.strip()
+
+    return "UNKNOWN"
+
+
+def signal_percent_to_dbm(percent: int | float | None) -> int | None:
+    """Approximate/heuristic conversion of signal quality percentage (0-100%) to RSSI in dBm.
+
+    Note: This is a linear approximation heuristic, not a direct RF measurement or logarithmic curve.
+    """
+    if percent is None:
+        return None
+    try:
+        p = max(0, min(100, float(percent)))
+        return int((p / 2.0) - 100.0)
+    except (ValueError, TypeError):
+        return None
+
+
+def signal_dbm_to_percent(dbm: int | float | None) -> int | None:
+    """Approximate/heuristic conversion of RSSI in dBm to signal quality percentage (0-100%).
+
+    Note: This is a linear approximation heuristic, not a direct RF measurement or logarithmic curve.
+    """
+    if dbm is None:
+        return None
+    try:
+        d = float(dbm)
+        p = 2.0 * (d + 100.0)
+        return int(max(0, min(100, round(p))))
+    except (ValueError, TypeError):
+        return None
+
+
+NEIGHBOR_STATE_PRIORITY: dict[str, int] = {
+    "REACHABLE": 6,
+    "PERMANENT": 5,
+    "STALE": 4,
+    "DELAY": 3,
+    "PROBE": 2,
+    "INCOMPLETE": 1,
+    "UNREACHABLE": 1,
+    "FAILED": 1,
+    "NOARP": 1,
+    "NONE": 0,
+    "UNKNOWN": 0,
+}
