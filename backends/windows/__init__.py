@@ -758,3 +758,5 @@ if ($pids) {
 # Windows DNS client server discovery via Get-DnsClientServerAddress
 
 # Windows DoH detection via Get-DnsClientDohServerAddress
+
+# Windows DHCP lease discovery via CIM Win32_NetworkAdapterConfiguration
