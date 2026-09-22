@@ -1,0 +1,17 @@
+[
+  {
+    "InterfaceIndex": 13,
+    "InterfaceAlias": "Wi-Fi",
+    "Dhcp": 1
+  },
+  {
+    "InterfaceIndex": 16,
+    "InterfaceAlias": "Ethernet 2",
+    "Dhcp": 0
+  },
+  {
+    "InterfaceIndex": 17,
+    "InterfaceAlias": "Ethernet",
+    "Dhcp": 1
+  }
+]
