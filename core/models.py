@@ -339,6 +339,118 @@ class DnsInfo:
 
 
 @dataclass
+class DhcpInfo:
+    """DHCP lease and server details."""
+    # Canonical fields
+    enabled: bool = False
+    server: str | None = None
+    address: str | None = None
+    lease_start: str | None = None
+    lease_expiry: str | None = None
+    lease_duration: int | None = None  # seconds
+    interface: str | None = None
+    source: str | None = None
+    status: str = "UNAVAILABLE"  # CONFIGURED, PARTIAL, NOT_DHCP, UNAVAILABLE, ERROR
+    router: str | None = None
+    subnet_mask: str | None = None
+    raw_details: dict[str, str] = field(default_factory=dict)
+
+    # Legacy backward-compatible fields
+    available: bool = False
+    server_ip: str | None = None
+    lease_obtained: str | None = None
+    lease_expires: str | None = None
+    lease_duration_seconds: int | None = None
+    assigned_ip: str | None = None
+
+    def __post_init__(self) -> None:
+        # Synchronize canonical and legacy fields
+        if self.server and not self.server_ip:
+            self.server_ip = self.server
+        elif self.server_ip and not self.server:
+            self.server = self.server_ip
+
+        if self.address and not self.assigned_ip:
+            self.assigned_ip = self.address
+        elif self.assigned_ip and not self.address:
+            self.address = self.assigned_ip
+
+        if self.lease_start and not self.lease_obtained:
+            self.lease_obtained = self.lease_start
+        elif self.lease_obtained and not self.lease_start:
+            self.lease_start = self.lease_obtained
+
+        if self.lease_expiry and not self.lease_expires:
+            self.lease_expires = self.lease_expiry
+        elif self.lease_expires and not self.lease_expiry:
+            self.lease_expiry = self.lease_expires
+
+        if self.lease_duration is not None and self.lease_duration_seconds is None:
+            self.lease_duration_seconds = self.lease_duration
+        elif self.lease_duration_seconds is not None and self.lease_duration is None:
+            self.lease_duration = self.lease_duration_seconds
+
+        if self.enabled and not self.available:
+            self.available = True
+        elif self.available and not self.enabled:
+            self.enabled = True
+
+        super().__setattr__("_initialized", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if not getattr(self, "_initialized", False):
+            return
+        if name == "server" and getattr(self, "server_ip", None) != value:
+            super().__setattr__("server_ip", value)
+        elif name == "server_ip" and getattr(self, "server", None) != value:
+            super().__setattr__("server", value)
+        elif name == "address" and getattr(self, "assigned_ip", None) != value:
+            super().__setattr__("assigned_ip", value)
+        elif name == "assigned_ip" and getattr(self, "address", None) != value:
+            super().__setattr__("address", value)
+        elif name == "lease_start" and getattr(self, "lease_obtained", None) != value:
+            super().__setattr__("lease_obtained", value)
+        elif name == "lease_obtained" and getattr(self, "lease_start", None) != value:
+            super().__setattr__("lease_start", value)
+        elif name == "lease_expiry" and getattr(self, "lease_expires", None) != value:
+            super().__setattr__("lease_expires", value)
+        elif name == "lease_expires" and getattr(self, "lease_expiry", None) != value:
+            super().__setattr__("lease_expiry", value)
+        elif name == "lease_duration" and getattr(self, "lease_duration_seconds", None) != value:
+            super().__setattr__("lease_duration_seconds", value)
+        elif name == "lease_duration_seconds" and getattr(self, "lease_duration", None) != value:
+            super().__setattr__("lease_duration", value)
+        elif name == "enabled" and getattr(self, "available", None) != value:
+            super().__setattr__("available", value)
+        elif name == "available" and getattr(self, "enabled", None) != value:
+            super().__setattr__("enabled", value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "server": self.server,
+            "address": self.address,
+            "lease_start": self.lease_start,
+            "lease_expiry": self.lease_expiry,
+            "lease_duration": self.lease_duration,
+            "interface": self.interface,
+            "source": self.source,
+            "status": self.status,
+            "router": self.router,
+            "subnet_mask": self.subnet_mask,
+            "raw_details": self.raw_details,
+            # Legacy aliases
+            "available": self.available,
+            "server_ip": self.server_ip,
+            "assigned_ip": self.assigned_ip,
+            "lease_obtained": self.lease_obtained,
+            "lease_expires": self.lease_expires,
+            "lease_duration_seconds": self.lease_duration_seconds,
+        }
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
