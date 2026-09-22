@@ -760,3 +760,5 @@ if ($pids) {
 # Windows DoH detection via Get-DnsClientDohServerAddress
 
 # Windows DHCP lease discovery via CIM Win32_NetworkAdapterConfiguration
+
+# Windows netsh wlan show interfaces parser
