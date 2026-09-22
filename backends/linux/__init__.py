@@ -1111,3 +1111,5 @@ class LinuxBackend(BasePlatformBackend):
 # NetworkManager nmcli and resolv.conf DNS fallback
 
 # Local stub resolver 127.0.0.53 identification
+
+# Linux DHCP lease discovery via systemd-networkd and dhclient
