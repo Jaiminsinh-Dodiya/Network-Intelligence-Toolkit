@@ -339,6 +339,205 @@ class DnsInfo:
 
 
 @dataclass
+class DhcpInfo:
+    """DHCP lease and server details."""
+    # Canonical fields
+    enabled: bool = False
+    server: str | None = None
+    address: str | None = None
+    lease_start: str | None = None
+    lease_expiry: str | None = None
+    lease_duration: int | None = None  # seconds
+    interface: str | None = None
+    source: str | None = None
+    status: str = "UNAVAILABLE"  # CONFIGURED, PARTIAL, NOT_DHCP, UNAVAILABLE, ERROR
+    router: str | None = None
+    subnet_mask: str | None = None
+    raw_details: dict[str, str] = field(default_factory=dict)
+
+    # Legacy backward-compatible fields
+    available: bool = False
+    server_ip: str | None = None
+    lease_obtained: str | None = None
+    lease_expires: str | None = None
+    lease_duration_seconds: int | None = None
+    assigned_ip: str | None = None
+
+    def __post_init__(self) -> None:
+        # Synchronize canonical and legacy fields
+        if self.server and not self.server_ip:
+            self.server_ip = self.server
+        elif self.server_ip and not self.server:
+            self.server = self.server_ip
+
+        if self.address and not self.assigned_ip:
+            self.assigned_ip = self.address
+        elif self.assigned_ip and not self.address:
+            self.address = self.assigned_ip
+
+        if self.lease_start and not self.lease_obtained:
+            self.lease_obtained = self.lease_start
+        elif self.lease_obtained and not self.lease_start:
+            self.lease_start = self.lease_obtained
+
+        if self.lease_expiry and not self.lease_expires:
+            self.lease_expires = self.lease_expiry
+        elif self.lease_expires and not self.lease_expiry:
+            self.lease_expiry = self.lease_expires
+
+        if self.lease_duration is not None and self.lease_duration_seconds is None:
+            self.lease_duration_seconds = self.lease_duration
+        elif self.lease_duration_seconds is not None and self.lease_duration is None:
+            self.lease_duration = self.lease_duration_seconds
+
+        if self.enabled and not self.available:
+            self.available = True
+        elif self.available and not self.enabled:
+            self.enabled = True
+
+        super().__setattr__("_initialized", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if not getattr(self, "_initialized", False):
+            return
+        if name == "server" and getattr(self, "server_ip", None) != value:
+            super().__setattr__("server_ip", value)
+        elif name == "server_ip" and getattr(self, "server", None) != value:
+            super().__setattr__("server", value)
+        elif name == "address" and getattr(self, "assigned_ip", None) != value:
+            super().__setattr__("assigned_ip", value)
+        elif name == "assigned_ip" and getattr(self, "address", None) != value:
+            super().__setattr__("address", value)
+        elif name == "lease_start" and getattr(self, "lease_obtained", None) != value:
+            super().__setattr__("lease_obtained", value)
+        elif name == "lease_obtained" and getattr(self, "lease_start", None) != value:
+            super().__setattr__("lease_start", value)
+        elif name == "lease_expiry" and getattr(self, "lease_expires", None) != value:
+            super().__setattr__("lease_expires", value)
+        elif name == "lease_expires" and getattr(self, "lease_expiry", None) != value:
+            super().__setattr__("lease_expiry", value)
+        elif name == "lease_duration" and getattr(self, "lease_duration_seconds", None) != value:
+            super().__setattr__("lease_duration_seconds", value)
+        elif name == "lease_duration_seconds" and getattr(self, "lease_duration", None) != value:
+            super().__setattr__("lease_duration", value)
+        elif name == "enabled" and getattr(self, "available", None) != value:
+            super().__setattr__("available", value)
+        elif name == "available" and getattr(self, "enabled", None) != value:
+            super().__setattr__("enabled", value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "server": self.server,
+            "address": self.address,
+            "lease_start": self.lease_start,
+            "lease_expiry": self.lease_expiry,
+            "lease_duration": self.lease_duration,
+            "interface": self.interface,
+            "source": self.source,
+            "status": self.status,
+            "router": self.router,
+            "subnet_mask": self.subnet_mask,
+            "raw_details": self.raw_details,
+            # Legacy aliases
+            "available": self.available,
+            "server_ip": self.server_ip,
+            "assigned_ip": self.assigned_ip,
+            "lease_obtained": self.lease_obtained,
+            "lease_expires": self.lease_expires,
+            "lease_duration_seconds": self.lease_duration_seconds,
+        }
+
+
+@dataclass
+class WifiInfo:
+    """Wi-Fi link and radio status."""
+    interface: str | None = None
+    ssid: str | None = None
+    bssid: str | None = None
+    state: str = "UNAVAILABLE"  # CONNECTED, DISCONNECTED, NOT_APPLICABLE, UNAVAILABLE, ERROR
+    is_wireless_interface: bool | None = None
+    connected: bool = False
+    frequency_mhz: int | None = None
+    channel: int | None = None
+    signal_percent: int | None = None
+    signal_dbm: int | None = None
+    signal_percent_estimated: bool = False
+    signal_dbm_estimated: bool = False
+    rx_rate_mbps: float | None = None
+    tx_rate_mbps: float | None = None
+    wifi_standard: str = "UNKNOWN"  # e.g. "802.11ax", "802.11ac", "802.11n", "802.11g", "802.11a", "802.11b", "802.11be", "UNKNOWN"
+    security_mode: str = "UNKNOWN"  # "OPEN", "WEP", "WPA", "WPA2", "WPA3", "WPA2-ENTERPRISE", "WPA3-ENTERPRISE", "OTHER", "UNKNOWN"
+    raw_security: str | None = None
+    source: str | None = None
+    # Legacy backward-compatible fields
+    is_wifi: bool = False
+    standard: str | None = None
+
+    def __post_init__(self) -> None:
+        # Synchronize canonical and legacy fields
+        if self.wifi_standard != "UNKNOWN" and self.standard is None:
+            self.standard = self.wifi_standard
+        elif self.standard is not None and self.wifi_standard == "UNKNOWN":
+            self.wifi_standard = self.standard
+
+        if self.is_wireless_interface is not None:
+            self.is_wifi = bool(self.is_wireless_interface)
+        elif self.is_wifi:
+            self.is_wireless_interface = True
+
+        if self.state == "CONNECTED":
+            self.connected = True
+        elif self.connected and self.state in ("UNAVAILABLE", None):
+            self.state = "CONNECTED"
+
+        super().__setattr__("_initialized", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if not getattr(self, "_initialized", False):
+            return
+        if name == "wifi_standard" and getattr(self, "standard", None) != value:
+            super().__setattr__("standard", value)
+        elif name == "standard" and getattr(self, "wifi_standard", None) != value:
+            super().__setattr__("wifi_standard", value or "UNKNOWN")
+        elif name == "is_wireless_interface" and getattr(self, "is_wifi", None) != bool(value):
+            super().__setattr__("is_wifi", bool(value))
+        elif name == "is_wifi" and getattr(self, "is_wireless_interface", None) != value:
+            super().__setattr__("is_wireless_interface", value)
+        elif name == "state" and value == "CONNECTED" and not getattr(self, "connected", False):
+            super().__setattr__("connected", True)
+        elif name == "connected" and value and getattr(self, "state", None) in ("UNAVAILABLE", None):
+            super().__setattr__("state", "CONNECTED")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "interface": self.interface,
+            "ssid": self.ssid,
+            "bssid": self.bssid,
+            "state": self.state,
+            "is_wireless_interface": self.is_wireless_interface,
+            "connected": self.connected,
+            "frequency_mhz": self.frequency_mhz,
+            "channel": self.channel,
+            "signal_percent": self.signal_percent,
+            "signal_dbm": self.signal_dbm,
+            "signal_percent_estimated": self.signal_percent_estimated,
+            "signal_dbm_estimated": self.signal_dbm_estimated,
+            "rx_rate_mbps": self.rx_rate_mbps,
+            "tx_rate_mbps": self.tx_rate_mbps,
+            "wifi_standard": self.wifi_standard,
+            "security_mode": self.security_mode,
+            "raw_security": self.raw_security,
+            "source": self.source,
+            # Legacy aliases
+            "is_wifi": self.is_wifi,
+            "standard": self.standard,
+        }
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""

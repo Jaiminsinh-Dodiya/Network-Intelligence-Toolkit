@@ -1,0 +1,38 @@
+[
+  {
+    "InterfaceIndex": 16,
+    "DHCPEnabled": false,
+    "DHCPServer": null,
+    "DHCPLeaseObtained": null,
+    "DHCPLeaseExpires": null,
+    "IPAddress": [
+      "192.168.56.1",
+      "fe80::f89c:e9c6:e8d7:cc9e"
+    ],
+    "IPSubnet": [
+      "255.255.255.0",
+      "64"
+    ],
+    "DefaultIPGateway": null,
+    "Description": "VirtualBox Host-Only Ethernet Adapter"
+  },
+  {
+    "InterfaceIndex": 13,
+    "DHCPEnabled": true,
+    "DHCPServer": "192.168.1.1",
+    "DHCPLeaseObtained": "/Date(1789851420000)/",
+    "DHCPLeaseExpires": "/Date(1789855019000)/",
+    "IPAddress": [
+      "192.168.1.150",
+      "fe80::dbbc:434d:9c63:5900"
+    ],
+    "IPSubnet": [
+      "255.255.255.0",
+      "64"
+    ],
+    "DefaultIPGateway": [
+      "192.168.1.1"
+    ],
+    "Description": "Killer Wi-Fi 6 AX1650i Wireless Adapter"
+  }
+]

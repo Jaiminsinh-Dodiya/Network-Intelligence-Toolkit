@@ -291,3 +291,5 @@ class CollectorCoordinator:
         return report
 
 # Routing and DNS coordinator collection pipeline
+
+# DHCP and Wi-Fi collection pipeline with --wifi flag

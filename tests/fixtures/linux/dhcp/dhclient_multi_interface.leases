@@ -1,0 +1,22 @@
+lease {
+  interface "eth0";
+  fixed-address 10.0.0.99;
+  option subnet-mask 255.255.255.0;
+  option routers 10.0.0.1;
+  option dhcp-server-identifier 10.0.0.1;
+  option dhcp-lease-time 7200;
+  renew 1 2026/09/20 01:00:00;
+  rebind 1 2026/09/20 01:45:00;
+  expire 1 2026/09/20 02:00:00;
+}
+lease {
+  interface "wlan0";
+  fixed-address 192.168.1.77;
+  option subnet-mask 255.255.255.0;
+  option routers 192.168.1.254;
+  option dhcp-server-identifier 192.168.1.254;
+  option dhcp-lease-time 86400;
+  renew 1 2026/09/20 12:00:00;
+  rebind 1 2026/09/20 18:00:00;
+  expire 1 2026/09/21 00:00:00;
+}

@@ -1,0 +1,3 @@
+no:GuestNet:00\:11\:22\:11\:22\:11:Infra:1:2412 MHz:54 Mbit/s:60:▂▄__:WPA2
+yes:LinuxOffice:00\:11\:22\:33\:44\:55:Infra:36:5180 MHz:866 Mbit/s:85:▂▄▆█:WPA2
+no:CorpEnterprise:00\:11\:22\:66\:77\:88:Infra:44:5220 MHz:866 Mbit/s:90:▂▄▆█:WPA2 802.1X
