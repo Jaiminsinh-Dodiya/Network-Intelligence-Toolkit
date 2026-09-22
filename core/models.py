@@ -451,6 +451,93 @@ class DhcpInfo:
 
 
 @dataclass
+class WifiInfo:
+    """Wi-Fi link and radio status."""
+    interface: str | None = None
+    ssid: str | None = None
+    bssid: str | None = None
+    state: str = "UNAVAILABLE"  # CONNECTED, DISCONNECTED, NOT_APPLICABLE, UNAVAILABLE, ERROR
+    is_wireless_interface: bool | None = None
+    connected: bool = False
+    frequency_mhz: int | None = None
+    channel: int | None = None
+    signal_percent: int | None = None
+    signal_dbm: int | None = None
+    signal_percent_estimated: bool = False
+    signal_dbm_estimated: bool = False
+    rx_rate_mbps: float | None = None
+    tx_rate_mbps: float | None = None
+    wifi_standard: str = "UNKNOWN"  # e.g. "802.11ax", "802.11ac", "802.11n", "802.11g", "802.11a", "802.11b", "802.11be", "UNKNOWN"
+    security_mode: str = "UNKNOWN"  # "OPEN", "WEP", "WPA", "WPA2", "WPA3", "WPA2-ENTERPRISE", "WPA3-ENTERPRISE", "OTHER", "UNKNOWN"
+    raw_security: str | None = None
+    source: str | None = None
+    # Legacy backward-compatible fields
+    is_wifi: bool = False
+    standard: str | None = None
+
+    def __post_init__(self) -> None:
+        # Synchronize canonical and legacy fields
+        if self.wifi_standard != "UNKNOWN" and self.standard is None:
+            self.standard = self.wifi_standard
+        elif self.standard is not None and self.wifi_standard == "UNKNOWN":
+            self.wifi_standard = self.standard
+
+        if self.is_wireless_interface is not None:
+            self.is_wifi = bool(self.is_wireless_interface)
+        elif self.is_wifi:
+            self.is_wireless_interface = True
+
+        if self.state == "CONNECTED":
+            self.connected = True
+        elif self.connected and self.state in ("UNAVAILABLE", None):
+            self.state = "CONNECTED"
+
+        super().__setattr__("_initialized", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if not getattr(self, "_initialized", False):
+            return
+        if name == "wifi_standard" and getattr(self, "standard", None) != value:
+            super().__setattr__("standard", value)
+        elif name == "standard" and getattr(self, "wifi_standard", None) != value:
+            super().__setattr__("wifi_standard", value or "UNKNOWN")
+        elif name == "is_wireless_interface" and getattr(self, "is_wifi", None) != bool(value):
+            super().__setattr__("is_wifi", bool(value))
+        elif name == "is_wifi" and getattr(self, "is_wireless_interface", None) != value:
+            super().__setattr__("is_wireless_interface", value)
+        elif name == "state" and value == "CONNECTED" and not getattr(self, "connected", False):
+            super().__setattr__("connected", True)
+        elif name == "connected" and value and getattr(self, "state", None) in ("UNAVAILABLE", None):
+            super().__setattr__("state", "CONNECTED")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "interface": self.interface,
+            "ssid": self.ssid,
+            "bssid": self.bssid,
+            "state": self.state,
+            "is_wireless_interface": self.is_wireless_interface,
+            "connected": self.connected,
+            "frequency_mhz": self.frequency_mhz,
+            "channel": self.channel,
+            "signal_percent": self.signal_percent,
+            "signal_dbm": self.signal_dbm,
+            "signal_percent_estimated": self.signal_percent_estimated,
+            "signal_dbm_estimated": self.signal_dbm_estimated,
+            "rx_rate_mbps": self.rx_rate_mbps,
+            "tx_rate_mbps": self.tx_rate_mbps,
+            "wifi_standard": self.wifi_standard,
+            "security_mode": self.security_mode,
+            "raw_security": self.raw_security,
+            "source": self.source,
+            # Legacy aliases
+            "is_wifi": self.is_wifi,
+            "standard": self.standard,
+        }
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
