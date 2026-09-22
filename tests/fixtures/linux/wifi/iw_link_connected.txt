@@ -1,0 +1,8 @@
+Connected to 00:11:22:33:44:55 (on wlan0)
+	SSID: LinuxOffice
+	freq: 5180
+	RX: 12345678 bytes (12345 packets)
+	TX: 8765432 bytes (9876 packets)
+	signal: -54 dBm
+	rx bitrate: 866.7 MBit/s
+	tx bitrate: 866.7 MBit/s
