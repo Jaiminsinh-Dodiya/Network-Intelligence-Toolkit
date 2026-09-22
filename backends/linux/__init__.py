@@ -1113,3 +1113,5 @@ class LinuxBackend(BasePlatformBackend):
 # Local stub resolver 127.0.0.53 identification
 
 # Linux DHCP lease discovery via systemd-networkd and dhclient
+
+# Linux wireless telemetry via iw dev link
