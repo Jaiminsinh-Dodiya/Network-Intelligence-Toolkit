@@ -383,3 +383,5 @@ class PublicIdentityCollector:
             cgnat_details=cgnat_details,
             geolocation_accuracy="APPROXIMATE",
         )
+
+# Dual-stack IPv4 and IPv6 independent resolution
