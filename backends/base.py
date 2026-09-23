@@ -139,3 +139,5 @@ class BasePlatformBackend(abc.ABC):
     @abc.abstractmethod
 
 # Interface-specific DHCP lease matching
+
+# Public internet identity get_public_ip backend integration
