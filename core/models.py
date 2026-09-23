@@ -538,6 +538,106 @@ class WifiInfo:
 
 
 @dataclass
+class PublicIpInfo:
+    """Public internet address and autonomous system metadata.
+
+    Semantics & Relationship Documentation:
+    - `ip` and `ip_version`: The Primary Observed Public IP address returned by external discovery.
+    - `ipv4`: The Observed Public IPv4 address.
+    - `ipv6`: The Observed Public IPv6 address.
+    - Metadata Fields (`asn`, `as_org`, `isp`, `country`, `region`, `city`, `reverse_dns`):
+      These fields correspond STRICTLY to `ip` + `ip_version` (the specific public address for which
+      metadata was retrieved). They do NOT imply or automatically describe both IPv4 and IPv6.
+    - Local vs. External View:
+      Phase 5 reports what external services observe. The local routing subsystem remains
+      authoritative for default route, gateway, and interface.
+    """
+    available: bool = False
+    ip: str | None = None
+    ip_version: int | None = None
+    ipv4: str | None = None
+    ipv6: str | None = None
+    asn: str | None = None
+    as_org: str | None = None
+    isp: str | None = None
+    country: str | None = None
+    region: str | None = None
+    city: str | None = None
+    reverse_dns: str | None = None
+    source: str | None = None
+    sources: dict[str, str] = field(default_factory=dict)
+    lookup_timestamp: str | None = None
+    status: str = "AVAILABLE"  # AVAILABLE, PARTIAL, OFFLINE, ERROR, DISABLED
+    reason: str | None = None
+    cgnat_detected: bool = False
+    cgnat_local_address: str | None = None
+    cgnat_interface: str | None = None
+    cgnat_details: str | None = None
+    geolocation_accuracy: str = "APPROXIMATE"
+    disclaimer: str = (
+        "Approximate geolocation is estimated based on publicly registered IP allocations "
+        "and does not represent precise physical location."
+    )
+
+    def __post_init__(self) -> None:
+        if self.ip and not self.ip_version:
+            try:
+                self.ip_version = ipaddress.ip_address(self.ip.strip()).version
+            except ValueError:
+                pass
+
+        if self.ip:
+            if self.ip_version == 4 and not self.ipv4:
+                self.ipv4 = self.ip
+            elif self.ip_version == 6 and not self.ipv6:
+                self.ipv6 = self.ip
+
+        if not self.ip:
+            if self.ipv4:
+                self.ip = self.ipv4
+                self.ip_version = 4
+            elif self.ipv6:
+                self.ip = self.ipv6
+                self.ip_version = 6
+
+        # Populate top-level source from sources dictionary if missing
+        if not self.source and self.sources:
+            self.source = self.sources.get("ip") or next(iter(self.sources.values()), None)
+
+    @property
+    def public_ipv4(self) -> str | None:
+        """Alias for the observed public IPv4 address."""
+        return self.ipv4 or (self.ip if self.ip_version == 4 else None)
+
+    @property
+    def public_ipv6(self) -> str | None:
+        """Alias for the observed public IPv6 address."""
+        return self.ipv6 or (self.ip if self.ip_version == 6 else None)
+
+    @property
+    def primary_source(self) -> str | None:
+        """Alias for the provider that discovered the primary observed public IP."""
+        return self.source
+
+    def to_dict(self) -> dict[str, Any]:
+        d = dataclasses.asdict(self)
+        d["public_ipv4"] = self.public_ipv4
+        d["public_ipv6"] = self.public_ipv6
+        d["primary_source"] = self.primary_source
+        return d
+
+
+VALID_CONNECTIVITY_STATUSES: set[str] = {
+    "SUCCESS",
+    "FAILED",
+    "TIMEOUT",
+    "ERROR",
+    "DISABLED",
+    "NOT_APPLICABLE",
+}
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
