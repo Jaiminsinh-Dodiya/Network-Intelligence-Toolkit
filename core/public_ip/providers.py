@@ -243,3 +243,72 @@ class IPWhoisProvider(BasePublicIpProvider):
     def lookup_ip(self, version: int = 4) -> str | None:
         """Generic identity endpoint does not perform family-specific discovery."""
         return None
+
+
+class IpifyProvider(BasePublicIpProvider):
+    """Provider for api.ipify.org / api64.ipify.org (Observed Public IP only)."""
+
+    def __init__(
+        self,
+        name: str = "ipify",
+        enabled: bool = True,
+        timeout_seconds: float = 3.0,
+        ipv4_url: str = "https://api.ipify.org?format=json",
+        ipv6_url: str = "https://api6.ipify.org?format=json",
+        dual_stack_url: str = "https://api64.ipify.org?format=json",
+    ) -> None:
+        super().__init__(name=name, enabled=enabled, timeout_seconds=timeout_seconds)
+        self.ipv4_url = ipv4_url
+        self.ipv6_url = ipv6_url
+        self.dual_stack_url = dual_stack_url
+
+    @property
+    def capabilities(self) -> set[ProviderCapability]:
+        return {
+            ProviderCapability.PUBLIC_IP,
+            ProviderCapability.IPV4,
+            ProviderCapability.IPV6,
+        }
+
+    def lookup_identity(self, requested_ip: str | None = None) -> ProviderResult:
+        # Ipify is an IP echo provider, not an arbitrary IP metadata service
+        result = ProviderResult()
+        url = self.dual_stack_url or self.ipv4_url
+        try:
+            _, body = _fetch_url(url, timeout=self.timeout_seconds)
+            data = json.loads(body.decode("utf-8"))
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as err:
+            logger.debug("Provider %s request failed: %s", self.name, err)
+            result.errors.append(f"{self.name} error: {err}")
+            return result
+
+        raw_ip = data.get("ip") if isinstance(data, dict) else None
+        if raw_ip:
+            if is_valid_public_ip(str(raw_ip)):
+                result.ip = str(raw_ip).strip()
+                result.sources["ip"] = self.name
+                if ":" in result.ip:
+                    result.ip_version = 6
+                    result.ipv6 = result.ip
+                    result.sources["ipv6"] = self.name
+                else:
+                    result.ip_version = 4
+                    result.ipv4 = result.ip
+                    result.sources["ipv4"] = self.name
+            else:
+                result.errors.append(f"{self.name} returned unusable or non-public IP address")
+
+        return result
+
+    def lookup_ip(self, version: int = 4) -> str | None:
+        """Perform family-specific public IP discovery using dedicated endpoints."""
+        url = self.ipv6_url if version == 6 else self.ipv4_url
+        try:
+            _, body = _fetch_url(url, timeout=self.timeout_seconds)
+            data = json.loads(body.decode("utf-8"))
+            raw_ip = data.get("ip") if isinstance(data, dict) else None
+            if raw_ip and is_valid_public_ip(str(raw_ip)):
+                return str(raw_ip).strip()
+        except Exception as err:
+            logger.debug("Provider %s lookup_ip(version=%d) failed: %s", self.name, version, err)
+        return None
