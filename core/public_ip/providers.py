@@ -312,3 +312,72 @@ class IpifyProvider(BasePublicIpProvider):
         except Exception as err:
             logger.debug("Provider %s lookup_ip(version=%d) failed: %s", self.name, version, err)
         return None
+
+
+class ICanHazIpProvider(BasePublicIpProvider):
+    """Provider for icanhazip.com (Observed Public IP only, plain text).
+
+    Family Semantics:
+        lookup_identity() performs IPv4 primary discovery via ipv4_url.
+        lookup_ip(6) performs IPv6 discovery via ipv6_url.
+        lookup_ip(4) performs IPv4 discovery via ipv4_url.
+    """
+
+    def __init__(
+        self,
+        name: str = "icanhazip",
+        enabled: bool = True,
+        timeout_seconds: float = 3.0,
+        ipv4_url: str = "https://4.icanhazip.com",
+        ipv6_url: str = "https://6.icanhazip.com",
+    ) -> None:
+        super().__init__(name=name, enabled=enabled, timeout_seconds=timeout_seconds)
+        self.ipv4_url = ipv4_url
+        self.ipv6_url = ipv6_url
+
+    @property
+    def capabilities(self) -> set[ProviderCapability]:
+        return {
+            ProviderCapability.PUBLIC_IP,
+            ProviderCapability.IPV4,
+            ProviderCapability.IPV6,
+        }
+
+    def lookup_identity(self, requested_ip: str | None = None) -> ProviderResult:
+        """Perform IPv4 primary public IP discovery via ipv4_url."""
+        result = ProviderResult()
+        url = self.ipv4_url
+        try:
+            _, body = _fetch_url(url, timeout=self.timeout_seconds)
+            text = body.decode("utf-8").strip()
+            if text:
+                if is_valid_public_ip(text):
+                    result.ip = text
+                    result.sources["ip"] = self.name
+                    if ":" in text:
+                        result.ip_version = 6
+                        result.ipv6 = text
+                        result.sources["ipv6"] = self.name
+                    else:
+                        result.ip_version = 4
+                        result.ipv4 = text
+                        result.sources["ipv4"] = self.name
+                else:
+                    result.errors.append(f"{self.name} returned unusable or non-public IP address")
+        except Exception as err:
+            logger.debug("Provider %s request failed: %s", self.name, err)
+            result.errors.append(f"{self.name} error: {err}")
+
+        return result
+
+    def lookup_ip(self, version: int = 4) -> str | None:
+        """Perform family-specific public IP discovery using dedicated endpoints."""
+        url = self.ipv6_url if version == 6 else self.ipv4_url
+        try:
+            _, body = _fetch_url(url, timeout=self.timeout_seconds)
+            text = body.decode("utf-8").strip()
+            if is_valid_public_ip(text):
+                return text
+        except Exception as err:
+            logger.debug("Provider %s lookup_ip(version=%d) failed: %s", self.name, version, err)
+        return None
