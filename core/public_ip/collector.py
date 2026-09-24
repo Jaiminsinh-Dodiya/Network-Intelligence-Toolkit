@@ -387,3 +387,5 @@ class PublicIdentityCollector:
 # Dual-stack IPv4 and IPv6 independent resolution
 
 # Reverse DNS PTR record resolution
+
+# Fallback error reason preservation
