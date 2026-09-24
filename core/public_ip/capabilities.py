@@ -15,3 +15,5 @@ class ProviderCapability(str, enum.Enum):
     ISP = "ISP"
     GEOLOCATION = "GEOLOCATION"
     PTR_METADATA = "PTR_METADATA"
+
+# Provider capability verification
