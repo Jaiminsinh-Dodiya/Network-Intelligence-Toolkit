@@ -389,3 +389,5 @@ class PublicIdentityCollector:
 # Reverse DNS PTR record resolution
 
 # Fallback error reason preservation
+
+# Source and primary_source provenance metadata
