@@ -71,3 +71,5 @@ def normalize_asn(asn_val: Any) -> str | None:
         return f"AS{match.group(0)}"
 
     return None
+
+# Carrier-grade and internal address hardening
