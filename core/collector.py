@@ -295,3 +295,5 @@ class CollectorCoordinator:
 # DHCP and Wi-Fi collection pipeline with --wifi flag
 
 # Public IP collection pipeline with --no-internet policy
+
+# Connectivity diagnostic execution pipeline
