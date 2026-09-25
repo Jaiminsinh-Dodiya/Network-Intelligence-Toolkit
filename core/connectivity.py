@@ -372,3 +372,137 @@ class ConnectivityCollector:
                 status="ERROR",
                 details=f"Ping execution failure: {err}",
             )
+
+    def _probe_dns(
+        self,
+        no_internet: bool,
+    ) -> tuple[list[ConnectivityTarget], ConnectivityTarget]:
+        """Perform DNS resolution latency checks against configured test hosts."""
+        targets: list[ConnectivityTarget] = []
+
+        if not self.dns_test_hosts:
+            target = ConnectivityTarget(
+                name="dns_aggregate",
+                target="None",
+                success=False,
+                status="NOT_APPLICABLE",
+                details="No DNS test hosts configured",
+            )
+            return [], target
+
+        if no_internet:
+            for host in self.dns_test_hosts:
+                targets.append(
+                    ConnectivityTarget(
+                        name=f"dns_{host}",
+                        target=host,
+                        success=False,
+                        status="DISABLED",
+                        details="--no-internet flag specified",
+                    )
+                )
+            aggregate = ConnectivityTarget(
+                name="dns_aggregate",
+                target="configured_dns_hosts",
+                success=False,
+                status="DISABLED",
+                details="--no-internet flag specified",
+            )
+            return targets, aggregate
+
+        successful_latencies: list[float] = []
+
+        for host in self.dns_test_hosts:
+            # Measure resolution latency with scoped thread-isolated executor
+            start_time = time.perf_counter()
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                future = executor.submit(socket.getaddrinfo, host, None)
+                try:
+                    res = future.result(timeout=self.dns_timeout)
+                    latency = round((time.perf_counter() - start_time) * 1000.0, 2)
+
+                    unique_addrs: list[str] = sorted(set(item[4][0] for item in res))
+                    if unique_addrs:
+                        successful_latencies.append(latency)
+                        details = f"Resolved {len(unique_addrs)} address(es): {', '.join(unique_addrs[:4])}"
+                        targets.append(
+                            ConnectivityTarget(
+                                name=f"dns_{host}",
+                                target=host,
+                                success=True,
+                                latency_ms=latency,
+                                status="SUCCESS",
+                                details=details,
+                            )
+                        )
+                    else:
+                        targets.append(
+                            ConnectivityTarget(
+                                name=f"dns_{host}",
+                                target=host,
+                                success=False,
+                                status="FAILED",
+                                details="DNS returned empty address set",
+                            )
+                        )
+                except concurrent.futures.TimeoutError:
+                    targets.append(
+                        ConnectivityTarget(
+                            name=f"dns_{host}",
+                            target=host,
+                            success=False,
+                            status="TIMEOUT",
+                            details=f"DNS resolution timed out after {self.dns_timeout:.1f}s",
+                        )
+                    )
+                except (socket.gaierror, OSError) as err:
+                    targets.append(
+                        ConnectivityTarget(
+                            name=f"dns_{host}",
+                            target=host,
+                            success=False,
+                            status="FAILED",
+                            details=f"DNS lookup failed: {err}",
+                        )
+                    )
+                except Exception as err:
+                    targets.append(
+                        ConnectivityTarget(
+                            name=f"dns_{host}",
+                            target=host,
+                            success=False,
+                            status="ERROR",
+                            details=f"DNS probe error: {err}",
+                        )
+                    )
+            finally:
+                # Do not wait for potentially blocked worker thread
+                try:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    executor.shutdown(wait=False)
+
+        # Derive aggregate result
+        if successful_latencies:
+            avg_lat = round(sum(successful_latencies) / len(successful_latencies), 2)
+            aggregate = ConnectivityTarget(
+                name="dns_aggregate",
+                target="configured_dns_hosts",
+                success=True,
+                latency_ms=avg_lat,
+                status="SUCCESS",
+                details=f"Resolved {len(successful_latencies)}/{len(self.dns_test_hosts)} test hosts (avg latency: {avg_lat} ms)",
+            )
+        else:
+            first_status = targets[0].status if targets else "FAILED"
+            first_details = targets[0].details if targets else "All DNS resolutions failed"
+            aggregate = ConnectivityTarget(
+                name="dns_aggregate",
+                target="configured_dns_hosts",
+                success=False,
+                status=first_status,
+                details=first_details,
+            )
+
+        return targets, aggregate
