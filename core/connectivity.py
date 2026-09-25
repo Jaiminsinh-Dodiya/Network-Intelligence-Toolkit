@@ -288,3 +288,87 @@ class ConnectivityCollector:
     # --------------------------------------------------------------------------
     # Probe Implementations
     # --------------------------------------------------------------------------
+
+    def _probe_gateway(
+        self,
+        selected_iface: InterfaceInfo | None,
+        routing: RoutingInfo | None,
+        no_internet: bool,
+    ) -> ConnectivityTarget:
+        """Select and ping the authoritative default gateway."""
+        if not routing:
+            return ConnectivityTarget(
+                name="gateway",
+                target="None",
+                success=False,
+                status="NOT_APPLICABLE",
+                details="Routing table information unavailable",
+            )
+
+        candidate_gw: str | None = None
+        candidate_iface: str | None = None
+
+        if selected_iface:
+            iface_name = selected_iface.name
+            if routing.default_ipv4 and routing.default_ipv4.interface == iface_name and routing.default_ipv4.gateway:
+                candidate_gw = routing.default_ipv4.gateway
+                candidate_iface = iface_name
+            elif routing.default_ipv6 and routing.default_ipv6.interface == iface_name and routing.default_ipv6.gateway:
+                candidate_gw = routing.default_ipv6.gateway
+                candidate_iface = iface_name
+            else:
+                return ConnectivityTarget(
+                    name="gateway",
+                    target="None",
+                    success=False,
+                    status="NOT_APPLICABLE",
+                    details=f"No default gateway configured on selected interface '{iface_name}'",
+                )
+        else:
+            if routing.default_ipv4 and routing.default_ipv4.gateway:
+                candidate_gw = routing.default_ipv4.gateway
+                candidate_iface = routing.default_ipv4.interface
+            elif routing.default_ipv6 and routing.default_ipv6.gateway:
+                candidate_gw = routing.default_ipv6.gateway
+                candidate_iface = routing.default_ipv6.interface
+
+        if not candidate_gw:
+            return ConnectivityTarget(
+                name="gateway",
+                target="None",
+                success=False,
+                status="NOT_APPLICABLE",
+                details="No default gateway discovered in routing table",
+            )
+
+        # Gateway authorization under --no-internet
+        if no_internet and not is_local_gateway(candidate_gw, selected_iface):
+            logger.debug(
+                "Gateway '%s' rejected under --no-internet: not verified as local/internal address.",
+                candidate_gw,
+            )
+            return ConnectivityTarget(
+                name="gateway",
+                target=candidate_gw,
+                success=False,
+                status="NOT_APPLICABLE",
+                details="Gateway address is not verified as local/internal under --no-internet",
+            )
+
+        # Dispatch ping to platform backend
+        try:
+            return self.backend.ping_host(
+                target=candidate_gw,
+                count=self.gateway_ping_count,
+                timeout_seconds=self.ping_timeout,
+                interface_name=candidate_iface,
+            )
+        except Exception as err:
+            logger.debug("Gateway ping execution failed: %s", err)
+            return ConnectivityTarget(
+                name="gateway",
+                target=candidate_gw,
+                success=False,
+                status="ERROR",
+                details=f"Ping execution failure: {err}",
+            )
