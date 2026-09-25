@@ -506,3 +506,158 @@ class ConnectivityCollector:
             )
 
         return targets, aggregate
+
+    def _probe_http(
+        self,
+        no_internet: bool,
+    ) -> tuple[list[ConnectivityTarget], ConnectivityTarget]:
+        """Perform HTTP/HTTPS probe against configured connectivity URLs."""
+        targets: list[ConnectivityTarget] = []
+
+        if not self.http_probe_urls:
+            aggregate = ConnectivityTarget(
+                name="internet_http",
+                target="None",
+                success=False,
+                status="NOT_APPLICABLE",
+                details="No HTTP probe URLs configured",
+            )
+            return [], aggregate
+
+        if no_internet:
+            for url in self.http_probe_urls:
+                targets.append(
+                    ConnectivityTarget(
+                        name="internet_http",
+                        target=url,
+                        success=False,
+                        status="DISABLED",
+                        details="--no-internet flag specified",
+                    )
+                )
+            aggregate = ConnectivityTarget(
+                name="internet_http",
+                target="configured_http_urls",
+                success=False,
+                status="DISABLED",
+                details="--no-internet flag specified",
+            )
+            return targets, aggregate
+
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),  # Direct connection (no ambient proxy)
+            BoundedRedirectHandler(max_redirects=1),  # At most 1 redirect
+        )
+
+        for url in self.http_probe_urls:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": USER_AGENT, "Accept": "*/*"},
+                method="GET",
+            )
+            start_time = time.perf_counter()
+            try:
+                with opener.open(req, timeout=self.http_timeout) as resp:
+                    latency = round((time.perf_counter() - start_time) * 1000.0, 2)
+                    code = resp.getcode()
+                    # Bounded read: read minimal payload to verify stream
+                    _ = resp.read(128)
+
+                    if code == 204:
+                        details = "HTTP 204 No Content (connectivity check passed)"
+                    else:
+                        details = f"HTTP {code} response received"
+
+                    targets.append(
+                        ConnectivityTarget(
+                            name="internet_http",
+                            target=url,
+                            success=True,
+                            latency_ms=latency,
+                            status="SUCCESS",
+                            http_status=code,
+                            details=details,
+                        )
+                    )
+            except urllib.error.HTTPError as err:
+                latency = round((time.perf_counter() - start_time) * 1000.0, 2)
+                # HTTP errors (e.g. 403, 404, 500) indicate transport success with application error
+                targets.append(
+                    ConnectivityTarget(
+                        name="internet_http",
+                        target=url,
+                        success=False,
+                        latency_ms=latency,
+                        status="FAILED",
+                        http_status=err.code,
+                        details=f"HTTP status {err.code}: {err.reason}",
+                    )
+                )
+            except (TimeoutError, socket.timeout):
+                targets.append(
+                    ConnectivityTarget(
+                        name="internet_http",
+                        target=url,
+                        success=False,
+                        status="TIMEOUT",
+                        details=f"HTTP probe timed out after {self.http_timeout:.1f}s",
+                    )
+                )
+            except urllib.error.URLError as err:
+                # Check for nested socket timeout
+                if isinstance(err.reason, (TimeoutError, socket.timeout)) or "timed out" in str(err.reason).lower():
+                    status = "TIMEOUT"
+                    details = f"HTTP probe timed out after {self.http_timeout:.1f}s"
+                else:
+                    status = "FAILED"
+                    details = f"Connection failed: {err.reason}"
+                targets.append(
+                    ConnectivityTarget(
+                        name="internet_http",
+                        target=url,
+                        success=False,
+                        status=status,
+                        details=details,
+                    )
+                )
+            except Exception as err:
+                targets.append(
+                    ConnectivityTarget(
+                        name="internet_http",
+                        target=url,
+                        success=False,
+                        status="ERROR",
+                        details=f"HTTP probe error: {err}",
+                    )
+                )
+
+        # Derive aggregate result
+        # Prefer 204 target or first successful target
+        successful_targets = [t for t in targets if t.success]
+        if successful_targets:
+            primary_target = successful_targets[0]
+            for t in successful_targets:
+                if t.http_status == 204:
+                    primary_target = t
+                    break
+            aggregate = ConnectivityTarget(
+                name="internet_http",
+                target=primary_target.target,
+                success=True,
+                latency_ms=primary_target.latency_ms,
+                status="SUCCESS",
+                http_status=primary_target.http_status,
+                details=primary_target.details,
+            )
+        else:
+            first_target = targets[0] if targets else None
+            aggregate = ConnectivityTarget(
+                name="internet_http",
+                target=first_target.target if first_target else "None",
+                success=False,
+                status=first_target.status if first_target else "FAILED",
+                http_status=first_target.http_status if first_target else None,
+                details=first_target.details if first_target else "All HTTP probes failed",
+            )
+
+        return targets, aggregate
