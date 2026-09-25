@@ -762,3 +762,5 @@ if ($pids) {
 # Windows DHCP lease discovery via CIM Win32_NetworkAdapterConfiguration
 
 # Windows netsh wlan show interfaces parser
+
+# Windows ICMP ping via Test-Connection -Count 1
