@@ -625,3 +625,5 @@ timeouts:
     assert collector.http_timeout == 4.0      # rejected 0, used default
     assert collector.tcp_timeout == 60.0      # clamped 120.0 to 60.0 upper bound
 
+
+# Verify --no-internet probe suppression
