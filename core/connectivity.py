@@ -661,3 +661,101 @@ class ConnectivityCollector:
             )
 
         return targets, aggregate
+
+    def _probe_tcp_family(
+        self,
+        version: int,
+        no_internet: bool,
+    ) -> ConnectivityTarget:
+        """Perform fixed TCP connection probe to port 443 for IPv4 or IPv6."""
+        probe_name = f"ipv{version}_connectivity"
+        family = socket.AF_INET if version == 4 else socket.AF_INET6
+
+        if no_internet:
+            return ConnectivityTarget(
+                name=probe_name,
+                target="configured_dns_hosts",
+                success=False,
+                status="DISABLED",
+                details="--no-internet flag specified",
+            )
+
+        # Resolve candidate addresses from configured DNS test hostnames
+        candidates: list[tuple[str, str]] = []  # (hostname, ip_address)
+        for host in self.dns_test_hosts:
+            try:
+                res = socket.getaddrinfo(host, self.tcp_probe_port, family=family, type=socket.SOCK_STREAM)
+                unique_ips: list[str] = []
+                for item in res:
+                    addr_str = item[4][0]
+                    if addr_str not in unique_ips:
+                        unique_ips.append(addr_str)
+                    if len(unique_ips) >= 2:  # Bounded: maximum 2 candidates per hostname
+                        break
+                for ip_str in unique_ips:
+                    candidates.append((host, ip_str))
+            except Exception as err:
+                logger.debug("Failed to resolve %s for IPv%d: %s", host, version, err)
+                continue
+
+        if not candidates:
+            return ConnectivityTarget(
+                name=probe_name,
+                target="None",
+                success=False,
+                status="NOT_APPLICABLE",
+                details=f"No IPv{version} destination available from configured test hosts",
+            )
+
+        last_status = "FAILED"
+        last_details = "Connection attempts exhausted"
+        last_target_str = candidates[0][0]
+
+        # Stop immediately after the first successful connection
+        for host, ip_str in candidates:
+            target_display = f"{host} ({ip_str}:{self.tcp_probe_port})" if version == 4 else f"{host} ([{ip_str}]:{self.tcp_probe_port})"
+            last_target_str = target_display
+
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            sock.settimeout(self.tcp_timeout)
+            start_time = time.perf_counter()
+            try:
+                sock.connect((ip_str, self.tcp_probe_port))
+                latency = round((time.perf_counter() - start_time) * 1000.0, 2)
+                sock.close()
+                return ConnectivityTarget(
+                    name=probe_name,
+                    target=target_display,
+                    success=True,
+                    latency_ms=latency,
+                    status="SUCCESS",
+                    details=f"TCP connection established to port {self.tcp_probe_port}",
+                )
+            except (TimeoutError, socket.timeout):
+                last_status = "TIMEOUT"
+                last_details = f"Connection to {target_display} timed out after {self.tcp_timeout:.1f}s"
+            except OSError as err:
+                # Distinguish network unreachable / address family unsupported from connection failure
+                is_unreachable = err.errno in (101, 113, 97, 10051, 10065) or "unreachable" in str(err).lower()
+                if is_unreachable:
+                    last_status = "NOT_APPLICABLE"
+                    last_details = f"IPv{version} network unreachable: {err}"
+                else:
+                    last_status = "FAILED"
+                    last_details = f"Connection to {target_display} failed: {err}"
+            except Exception as err:
+                last_status = "FAILED"
+                last_details = f"Connection to {target_display} error: {err}"
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        return ConnectivityTarget(
+            name=probe_name,
+            target=last_target_str,
+            success=False,
+            status=last_status,
+            details=last_details,
+        )
