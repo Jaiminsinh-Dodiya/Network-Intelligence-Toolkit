@@ -744,3 +744,5 @@ if __name__ == "__main__":
 # DHCP and Wi-Fi console table rendering
 
 # Public Internet Identity & ASN terminal rendering
+
+# Connectivity diagnostic tables console rendering
