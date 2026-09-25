@@ -141,3 +141,5 @@ class BasePlatformBackend(abc.ABC):
 # Interface-specific DHCP lease matching
 
 # Public internet identity get_public_ip backend integration
+
+# Connectivity diagnostics get_connectivity backend integration
