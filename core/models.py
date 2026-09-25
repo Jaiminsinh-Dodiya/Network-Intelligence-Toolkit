@@ -638,6 +638,46 @@ VALID_CONNECTIVITY_STATUSES: set[str] = {
 
 
 @dataclass
+class ConnectivityTarget:
+    """Result of an individual connectivity test."""
+    name: str
+    target: str
+    success: bool
+    latency_ms: float | None = None
+    packet_loss_pct: float | None = None
+    details: str | None = None
+    status: str = ""
+    http_status: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.status:
+            self.status = "SUCCESS" if self.success else "FAILED"
+        elif self.status not in VALID_CONNECTIVITY_STATUSES:
+            raise ValueError(
+                f"Invalid connectivity status: '{self.status}'. "
+                f"Must be one of {sorted(VALID_CONNECTIVITY_STATUSES)}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class ConnectivityInfo:
+    """Comprehensive host connectivity results."""
+    local_interface: ConnectivityTarget | None = None
+    gateway: ConnectivityTarget | None = None
+    dns: ConnectivityTarget | None = None
+    internet: ConnectivityTarget | None = None
+    ipv4: ConnectivityTarget | None = None
+    ipv6: ConnectivityTarget | None = None
+    all_targets: list[ConnectivityTarget] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""

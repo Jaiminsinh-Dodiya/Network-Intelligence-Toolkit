@@ -1117,3 +1117,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux wireless telemetry via iw dev link
 
 # Linux nmcli dev wifi fallback parser
+
+# Linux ICMP ping via ping -c 1

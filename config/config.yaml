@@ -67,3 +67,5 @@ pcap:
 
 
 # Public IP provider timeouts and rate limit thresholds
+
+# Connectivity diagnostic probe targets and timeout thresholds
