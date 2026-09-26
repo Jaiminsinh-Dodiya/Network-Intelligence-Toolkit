@@ -761,3 +761,5 @@ class ConnectivityCollector:
         )
 
 # Bounded executor thread isolation for DNS probes
+
+# Enforce hard timeout parsing
