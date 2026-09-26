@@ -759,3 +759,5 @@ class ConnectivityCollector:
             status=last_status,
             details=last_details,
         )
+
+# Bounded executor thread isolation for DNS probes
