@@ -627,3 +627,5 @@ timeouts:
 
 
 # Verify --no-internet probe suppression
+
+# Thread termination on timeout regression coverage
