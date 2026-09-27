@@ -1119,3 +1119,11 @@ class LinuxBackend(BasePlatformBackend):
 # Linux nmcli dev wifi fallback parser
 
 # Linux ICMP ping via ping -c 1
+
+# Linux ip -j neigh parser
+
+# Linux /proc/net/arp fallback parser
+
+# Linux ss -tunap socket enumeration parser
+
+# Linux psutil and /proc/net/{tcp,udp} socket fallback

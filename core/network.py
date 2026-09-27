@@ -561,3 +561,145 @@ NEIGHBOR_STATE_PRIORITY: dict[str, int] = {
     "NONE": 0,
     "UNKNOWN": 0,
 }
+
+
+def is_gateway_match(
+    neighbor_ip: str,
+    neighbor_iface: str,
+    routing: RoutingInfo | None,
+) -> bool:
+    """Verify if neighbor IP matches an authoritative default gateway for the exact same interface and family."""
+    if not routing:
+        return False
+    clean_nip = normalize_ip_string(neighbor_ip).split("%")[0]
+    try:
+        nip_obj = ipaddress.ip_address(clean_nip)
+    except ValueError:
+        return False
+
+    n_iface_clean = neighbor_iface.strip().lower()
+
+    # 1. Default IPv4 Route: check IP, interface, and IPv4 family
+    if nip_obj.version == 4 and routing.default_ipv4:
+        d4_gw = normalize_ip_string(routing.default_ipv4.gateway or "").split("%")[0]
+        d4_iface = (routing.default_ipv4.interface or "").strip().lower()
+        if d4_gw and d4_gw == clean_nip and d4_iface == n_iface_clean:
+            return True
+
+    # 2. Default IPv6 Route: check IP, interface, and IPv6 family
+    if nip_obj.version == 6 and routing.default_ipv6:
+        d6_gw = normalize_ip_string(routing.default_ipv6.gateway or "").split("%")[0]
+        d6_iface = (routing.default_ipv6.interface or "").strip().lower()
+        if d6_gw and d6_gw == clean_nip and d6_iface == n_iface_clean:
+            return True
+
+    # 3. Explicit default routes in table (0.0.0.0/0 or ::/0)
+    for route in routing.routes:
+        if route.gateway and route.ip_version == nip_obj.version:
+            r_gw = normalize_ip_string(route.gateway).split("%")[0]
+            r_iface = (route.interface or "").strip().lower()
+            if r_gw == clean_nip and r_iface == n_iface_clean:
+                if route.destination in ("0.0.0.0/0", "::/0", "default"):
+                    return True
+
+    return False
+
+
+def deduplicate_neighbors(neighbors: list[NeighborEntry]) -> list[NeighborEntry]:
+    """Deduplicate neighbor entries conservatively by (ip_address, interface).
+
+    Rules:
+        - Deduplicate on (ip_address, interface). Never deduplicate solely on MAC.
+        - Preserve the entry with the highest state priority.
+        - Merge is_router flag if either entry indicates router status.
+        - Prefer a valid MAC address over 'UNKNOWN' or empty.
+    """
+    dedup: dict[tuple[str, str], NeighborEntry] = {}
+
+    for n in neighbors:
+        clean_ip = normalize_ip_string(n.ip_address)
+        clean_iface = n.interface.strip()
+        key = (clean_ip, clean_iface)
+        if key not in dedup:
+            dedup[key] = NeighborEntry(
+                ip_address=n.ip_address,
+                mac_address=n.mac_address,
+                interface=n.interface,
+                state=n.state,
+                is_router=n.is_router,
+            )
+        else:
+            existing = dedup[key]
+            # State priority comparison
+            p_existing = NEIGHBOR_STATE_PRIORITY.get(existing.state.upper(), 0)
+            p_new = NEIGHBOR_STATE_PRIORITY.get(n.state.upper(), 0)
+            if p_new > p_existing:
+                existing.state = n.state
+
+            # Router flag merge
+            if n.is_router:
+                existing.is_router = True
+
+            # MAC preservation
+            if existing.mac_address in ("UNKNOWN", "") and n.mac_address not in ("UNKNOWN", ""):
+                existing.mac_address = n.mac_address
+
+    return list(dedup.values())
+
+
+def sort_neighbors(neighbors: list[NeighborEntry]) -> list[NeighborEntry]:
+    """Deterministically sort neighbor entries.
+
+    Sort order:
+        1. interface (case-insensitive)
+        2. IP version (4 before 6)
+        3. ip_address (numerical value)
+        4. mac_address (case-insensitive)
+        5. state
+    """
+    def key_fn(entry: NeighborEntry) -> tuple:
+        clean_ip = normalize_ip_string(entry.ip_address).split("%")[0]
+        try:
+            ip_obj = ipaddress.ip_address(clean_ip)
+            ver = ip_obj.version
+            ip_val = int(ip_obj)
+        except ValueError:
+            ver = 99
+            ip_val = clean_ip
+        return (
+            entry.interface.lower(),
+            ver,
+            ip_val,
+            entry.mac_address.lower(),
+            entry.state,
+        )
+
+    return sorted(neighbors, key=key_fn)
+
+
+def sort_sockets(sockets: list[SocketEntry]) -> list[SocketEntry]:
+    """Deterministically sort socket entries.
+
+    Sort order:
+        1. protocol ("TCP" before "UDP")
+        2. local_address
+        3. local_port
+        4. remote_address (None as empty string)
+        5. remote_port (None as -1)
+        6. state
+        7. pid (None as -1)
+    """
+    def key_fn(entry: SocketEntry) -> tuple:
+        return (
+            entry.protocol.upper(),
+            entry.local_address,
+            entry.local_port,
+            entry.remote_address or "",
+            entry.remote_port if entry.remote_port is not None else -1,
+            entry.state,
+            entry.pid if entry.pid is not None else -1,
+        )
+
+    return sorted(sockets, key=key_fn)
+
+

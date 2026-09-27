@@ -764,3 +764,11 @@ if ($pids) {
 # Windows netsh wlan show interfaces parser
 
 # Windows ICMP ping via Test-Connection -Count 1
+
+# Windows Get-NetNeighbor collection
+
+# Windows neighbor MAC formatting and adapter filtering
+
+# Windows Get-NetTCPConnection and Get-NetUDPEndpoint parser
+
+# Windows socket PID to process name mapping via Get-Process

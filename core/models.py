@@ -678,6 +678,35 @@ class ConnectivityInfo:
 
 
 @dataclass
+class NeighborEntry:
+    """Entry in local neighbor/ARP cache."""
+    ip_address: str
+    mac_address: str
+    interface: str
+    state: str = "UNKNOWN"
+    is_router: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class SocketEntry:
+    """Local listening or connected socket."""
+    protocol: str
+    local_address: str
+    local_port: int
+    remote_address: str | None = None
+    remote_port: int | None = None
+    state: str = "UNKNOWN"
+    pid: int | None = None
+    process_name: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
