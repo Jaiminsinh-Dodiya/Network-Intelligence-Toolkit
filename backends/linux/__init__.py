@@ -1125,3 +1125,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux /proc/net/arp fallback parser
 
 # Linux ss -tunap socket enumeration parser
+
+# Linux psutil and /proc/net/{tcp,udp} socket fallback
