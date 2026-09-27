@@ -297,3 +297,5 @@ class CollectorCoordinator:
 # Public IP collection pipeline with --no-internet policy
 
 # Connectivity diagnostic execution pipeline
+
+# Host telemetry collection for --neighbors and --sockets
