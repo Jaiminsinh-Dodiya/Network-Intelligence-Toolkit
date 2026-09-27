@@ -766,3 +766,5 @@ if ($pids) {
 # Windows ICMP ping via Test-Connection -Count 1
 
 # Windows Get-NetNeighbor collection
+
+# Windows neighbor MAC formatting and adapter filtering
