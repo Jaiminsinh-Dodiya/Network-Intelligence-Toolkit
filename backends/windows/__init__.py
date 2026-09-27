@@ -768,3 +768,5 @@ if ($pids) {
 # Windows Get-NetNeighbor collection
 
 # Windows neighbor MAC formatting and adapter filtering
+
+# Windows Get-NetTCPConnection and Get-NetUDPEndpoint parser
