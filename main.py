@@ -748,3 +748,5 @@ if __name__ == "__main__":
 # Connectivity diagnostic tables console rendering
 
 # Connectivity TIMEOUT badge formatting
+
+# Neighbors and Sockets console table rendering
