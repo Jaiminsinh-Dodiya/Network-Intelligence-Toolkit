@@ -1121,3 +1121,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux ICMP ping via ping -c 1
 
 # Linux ip -j neigh parser
+
+# Linux /proc/net/arp fallback parser
