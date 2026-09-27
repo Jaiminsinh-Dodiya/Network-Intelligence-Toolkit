@@ -770,3 +770,5 @@ if ($pids) {
 # Windows neighbor MAC formatting and adapter filtering
 
 # Windows Get-NetTCPConnection and Get-NetUDPEndpoint parser
+
+# Windows socket PID to process name mapping via Get-Process
