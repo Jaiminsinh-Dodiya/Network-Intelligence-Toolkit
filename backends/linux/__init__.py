@@ -1119,3 +1119,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux nmcli dev wifi fallback parser
 
 # Linux ICMP ping via ping -c 1
+
+# Linux ip -j neigh parser
