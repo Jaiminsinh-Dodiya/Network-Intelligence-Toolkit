@@ -1123,3 +1123,5 @@ class LinuxBackend(BasePlatformBackend):
 # Linux ip -j neigh parser
 
 # Linux /proc/net/arp fallback parser
+
+# Linux ss -tunap socket enumeration parser
