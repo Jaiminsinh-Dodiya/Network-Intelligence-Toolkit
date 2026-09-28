@@ -707,6 +707,186 @@ class SocketEntry:
 
 
 @dataclass
+class TcpConversation:
+    """Analyzed TCP conversation flow."""
+    client_ip: str
+    client_port: int
+    server_ip: str
+    server_port: int
+    packets: int = 0
+    bytes_sent: int = 0
+    syn_count: int = 0
+    syn_ack_count: int = 0
+    ack_count: int = 0
+    fin_count: int = 0
+    rst_count: int = 0
+    retransmissions: int = 0
+    handshake_status: str = "UNKNOWN"  # COMPLETE, INCOMPLETE, RESET_DURING_HANDSHAKE, UNKNOWN
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class DnsQuerySummary:
+    """Aggregated DNS query from PCAP."""
+    name: str
+    qtype: str
+    rcode: str
+    count: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class HttpRequestSummary:
+    """Visible plaintext HTTP request from PCAP."""
+    method: str
+    host: str
+    path: str
+    status_code: int | None = None
+    content_type: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class TlsMetadata:
+    """Visible TLS connection metadata from PCAP."""
+    sni: str | None = None
+    version: str | None = None
+    cipher_suite: str | None = None
+    client_ip: str = ""
+    server_ip: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class PcapSummary:
+    """Summary of authorized PCAP/PCAPNG packet analysis."""
+    available: bool = False
+    file_path: str = ""
+    packet_count: int = 0
+    duration_seconds: float = 0.0
+    protocol_distribution: dict[str, int] = field(default_factory=dict)
+    conversations: list[TcpConversation] = field(default_factory=list)
+    handshake_complete_count: int = 0
+    handshake_incomplete_count: int = 0
+    handshake_reset_count: int = 0
+    tcp_flags_total: dict[str, int] = field(default_factory=dict)
+    dns_queries: list[DnsQuerySummary] = field(default_factory=list)
+    http_requests: list[HttpRequestSummary] = field(default_factory=list)
+    tls_sessions: list[TlsMetadata] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+# ==============================================================================
+# ==============================================================================
+# Phase 8: Authorized PCAP/PCAPNG Analysis Models
+# ==============================================================================
+
+@dataclass
+class PcapProtocolStat:
+    """Decoded protocol occurrence and byte volume in capture."""
+    protocol: str
+    packet_count: int
+    byte_count: int
+    percentage: float = 0.0
+    percent_packets: float | None = None
+    percent_bytes: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.percent_packets is None:
+            self.percent_packets = self.percentage
+        elif self.percentage == 0.0 and self.percent_packets is not None:
+            self.percentage = self.percent_packets
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class PcapEndpointStat:
+    """Unique IP endpoint observed in capture traffic."""
+    address: str
+    packet_count: int
+    byte_count: int
+    address_family: int = 4  # 4 or 6
+    ip_version: int = 4
+    sent_packets: int = 0
+    received_packets: int = 0
+    sent_bytes: int = 0
+    received_bytes: int = 0
+
+    def __post_init__(self) -> None:
+        if self.address_family and not self.ip_version:
+            self.ip_version = self.address_family
+        elif self.ip_version and not self.address_family:
+            self.address_family = self.ip_version
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class PcapConversationStat:
+    """Unidirectional or bidirectional TCP/UDP conversation between two endpoints."""
+    protocol: str
+    endpoint_a: str = ""
+    port_a: int | None = None
+    endpoint_b: str = ""
+    port_b: int | None = None
+    packet_count: int = 0
+    byte_count: int = 0
+    source: str = ""
+    source_port: int = 0
+    destination: str = ""
+    destination_port: int = 0
+    frames: int = 0
+    bytes: int = 0
+    relative_start: float | None = None
+    duration: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.endpoint_a and self.source:
+            self.endpoint_a = self.source
+        if not self.source and self.endpoint_a:
+            self.source = self.endpoint_a
+        if self.port_a is None and self.source_port:
+            self.port_a = self.source_port
+        elif self.source_port == 0 and self.port_a is not None:
+            self.source_port = self.port_a
+
+        if not self.endpoint_b and self.destination:
+            self.endpoint_b = self.destination
+        if not self.destination and self.endpoint_b:
+            self.destination = self.endpoint_b
+        if self.port_b is None and self.destination_port:
+            self.port_b = self.destination_port
+        elif self.destination_port == 0 and self.port_b is not None:
+            self.destination_port = self.port_b
+
+        if self.packet_count == 0 and self.frames:
+            self.packet_count = self.frames
+        elif self.frames == 0 and self.packet_count:
+            self.frames = self.packet_count
+
+        if self.byte_count == 0 and self.bytes:
+            self.byte_count = self.bytes
+        elif self.bytes == 0 and self.byte_count:
+            self.bytes = self.byte_count
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
