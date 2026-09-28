@@ -1100,30 +1100,828 @@ class LinuxBackend(BasePlatformBackend):
             logger.debug("Linux psutil socket fallback failed: %s", err)
             return []
 
-# Linux ip-addr network math normalization integration
+    def get_tshark_path(self) -> str | None:
+        """Find and return the path to tshark executable on Linux."""
+        import os
+        import shutil
+        found = shutil.which("tshark")
+        if found:
+            return found
+        standard_paths = [
+            "/usr/bin/tshark",
+            "/usr/local/bin/tshark",
+        ]
+        for p in standard_paths:
+            if os.path.isfile(p):
+                return p
+        return None
 
-# Linux ip -j route parser
+    def ping_host(
+        self,
+        target: str,
+        count: int = 2,
+        timeout_seconds: float = 3.0,
+        interface_name: str | None = None,
+    ) -> ConnectivityTarget:
+        """Send ICMP echo requests using Linux ping utility."""
+        is_v6 = ":" in target
+        ping_bin = "ping"
+        if not is_tool_available(ping_bin):
+            if is_v6 and is_tool_available("ping6"):
+                ping_bin = "ping6"
+            else:
+                return ConnectivityTarget(
+                    name="gateway",
+                    target=target,
+                    success=False,
+                    status="ERROR",
+                    details="Linux ping utility not found in PATH",
+                )
 
-# Linux policy routing rules and route metrics
+        timeout_sec = max(1, int(round(timeout_seconds)))
+        cmd = [ping_bin, "-c", str(count), "-W", str(timeout_sec)]
 
-# systemd-resolved resolvectl status DNS parser
+        if interface_name:
+            cmd.extend(["-I", interface_name])
 
-# NetworkManager nmcli and resolv.conf DNS fallback
+        cmd.append(target)
 
-# Local stub resolver 127.0.0.53 identification
+        try:
+            proc_timeout = (count * timeout_seconds) + 2.0
+            res = run_command(cmd, timeout=proc_timeout, check=False)
+        except Exception as err:
+            logger.debug("Linux ping execution failed: %s", err)
+            return ConnectivityTarget(
+                name="gateway",
+                target=target,
+                success=False,
+                status="ERROR",
+                details=f"Ping execution error: {err}",
+            )
 
-# Linux DHCP lease discovery via systemd-networkd and dhclient
+        return parse_linux_ping_output(res.stdout, target=target)
 
-# Linux wireless telemetry via iw dev link
 
-# Linux nmcli dev wifi fallback parser
+def parse_linux_ping_output(stdout: str, target: str) -> ConnectivityTarget:
+    """Parse Linux ping command output into normalized ConnectivityTarget."""
+    if not stdout or not stdout.strip():
+        return ConnectivityTarget(
+            name="gateway",
+            target=target,
+            success=False,
+            status="ERROR",
+            details="Empty output from ping utility",
+        )
 
-# Linux ICMP ping via ping -c 1
+    pkt_match = re.search(
+        r"(\d+)\s+packets transmitted,\s+(\d+)\s+(?:packets\s+)?received,\s+([\d\.]+)%\s+packet loss",
+        stdout,
+        re.IGNORECASE,
+    )
 
-# Linux ip -j neigh parser
+    if not pkt_match:
+        lower_out = stdout.lower()
+        if "unknown host" in lower_out or "name or service not known" in lower_out:
+            return ConnectivityTarget(
+                name="gateway",
+                target=target,
+                success=False,
+                status="FAILED",
+                details="Unknown host or resolution error",
+            )
+        if "network is unreachable" in lower_out or "destination host unreachable" in lower_out:
+            return ConnectivityTarget(
+                name="gateway",
+                target=target,
+                success=False,
+                status="FAILED",
+                details="Network or destination host unreachable",
+            )
+        return ConnectivityTarget(
+            name="gateway",
+            target=target,
+            success=False,
+            status="ERROR",
+            details="Malformed ping output",
+        )
 
-# Linux /proc/net/arp fallback parser
+    sent = int(pkt_match.group(1))
+    received = int(pkt_match.group(2))
+    loss_pct = float(pkt_match.group(3))
 
-# Linux ss -tunap socket enumeration parser
+    rtt_match = re.search(
+        r"(?:rtt|round-trip)\s+min/avg/max/(?:mdev|stddev)\s*=\s*([\d\.]+)/([\d\.]+)/([\d\.]+)/([\d\.]+)\s*ms",
+        stdout,
+        re.IGNORECASE,
+    )
 
-# Linux psutil and /proc/net/{tcp,udp} socket fallback
+    latency_ms: float | None = None
+    if rtt_match:
+        latency_ms = float(rtt_match.group(2))
+    elif received > 0:
+        reply_times = [
+            float(m) for m in re.findall(r"time=([\d\.]+)\s*ms", stdout, re.IGNORECASE)
+        ]
+        if reply_times:
+            latency_ms = round(sum(reply_times) / len(reply_times), 2)
+
+    if received > 0:
+        status = "SUCCESS"
+        details = f"{received}/{sent} packets received ({loss_pct:.0f}% loss)"
+        success = True
+    else:
+        lower_out = stdout.lower()
+        if "100% packet loss" in lower_out or "100.0% packet loss" in lower_out:
+            status = "TIMEOUT"
+            details = "Request timed out (100% packet loss)"
+        elif "destination host unreachable" in lower_out or "network is unreachable" in lower_out:
+            status = "FAILED"
+            details = "Destination unreachable (100% packet loss)"
+        else:
+            status = "FAILED"
+            details = f"All packets lost ({loss_pct:.0f}% loss)"
+        success = False
+
+    return ConnectivityTarget(
+        name="gateway",
+        target=target,
+        success=success,
+        latency_ms=latency_ms,
+        packet_loss_pct=loss_pct,
+        details=details,
+        status=status,
+    )
+
+
+
+def parse_systemd_lease(content: str, iface_name: str | None = None) -> DhcpInfo | None:
+    """Parse a systemd-networkd lease file (/run/systemd/netif/leases/<ifindex>)."""
+    if not content or not content.strip():
+        return None
+
+    data: dict[str, str] = {}
+    for line in content.splitlines():
+        line_s = line.strip()
+        if not line_s or line_s.startswith("#") or "=" not in line_s:
+            continue
+        k, v = line_s.split("=", 1)
+        data[k.strip()] = v.strip().strip('"\'')
+
+    server = data.get("SERVER_ADDRESS")
+    address = data.get("ADDRESS")
+    subnet_mask = data.get("NETMASK")
+    router = data.get("ROUTER") or data.get("ROUTER_ADDRESS")
+
+    lifetime_str = data.get("LIFETIME")
+    lease_duration = None
+    if lifetime_str and lifetime_str.isdigit():
+        lease_duration = int(lifetime_str)
+
+    if not server and not address:
+        return None
+
+    status = "CONFIGURED" if server else "PARTIAL"
+    return DhcpInfo(
+        enabled=True,
+        status=status,
+        server=server,
+        address=address,
+        subnet_mask=subnet_mask,
+        router=router,
+        lease_duration=lease_duration,
+        interface=iface_name,
+        source=f"/run/systemd/netif/leases ({iface_name or 'interface'})",
+        raw_details=data,
+    )
+
+
+def parse_dhclient_leases(content: str, iface_name: str | None = None) -> DhcpInfo | None:
+    """Parse ISC dhclient lease file (/var/lib/dhcp/dhclient*.leases).
+
+    Enforces interface-specific matching to prevent cross-interface lease contamination:
+    - When iface_name is provided:
+        - block interface matches target -> accept
+        - block interface differs -> reject
+        - block interface missing -> reject
+    - When iface_name is None:
+        - accept blocks with whatever interface is defined (or None)
+    """
+    if not content or not content.strip():
+        return None
+
+    blocks = re.findall(r"lease\s*\{([^}]+)\}", content)
+    if not blocks:
+        return None
+
+    last_matching_lease: dict[str, Any] | None = None
+    for block in blocks:
+        iface_m = re.search(r'interface\s+"([^"]+)";', block)
+        block_iface = iface_m.group(1) if iface_m else None
+        if iface_name:
+            if not block_iface or block_iface.lower() != iface_name.lower():
+                continue
+
+        lease_data: dict[str, Any] = {}
+        addr_m = re.search(r"fixed-address\s+([^;]+);", block)
+        if addr_m:
+            lease_data["address"] = addr_m.group(1).strip()
+
+        mask_m = re.search(r"option\s+subnet-mask\s+([^;]+);", block)
+        if mask_m:
+            lease_data["subnet_mask"] = mask_m.group(1).strip()
+
+        router_m = re.search(r"option\s+routers\s+([^;]+);", block)
+        if router_m:
+            lease_data["router"] = router_m.group(1).strip()
+
+        server_m = re.search(r"option\s+dhcp-server-identifier\s+([^;]+);", block)
+        if server_m:
+            lease_data["server"] = server_m.group(1).strip()
+
+        duration_m = re.search(r"option\s+dhcp-lease-time\s+(\d+);", block)
+        if duration_m:
+            lease_data["lease_duration"] = int(duration_m.group(1))
+
+        renew_m = re.search(r"renew\s+\d+\s+([^;]+);", block)
+        if renew_m:
+            lease_data["lease_start"] = renew_m.group(1).strip()
+
+        expire_m = re.search(r"expire\s+\d+\s+([^;]+);", block)
+        if expire_m:
+            lease_data["lease_expiry"] = expire_m.group(1).strip()
+
+        lease_data["interface"] = block_iface or iface_name
+        last_matching_lease = lease_data
+
+    if not last_matching_lease:
+        return None
+
+    server = last_matching_lease.get("server")
+    status = "CONFIGURED" if server else "PARTIAL"
+    return DhcpInfo(
+        enabled=True,
+        status=status,
+        server=server,
+        address=last_matching_lease.get("address"),
+        subnet_mask=last_matching_lease.get("subnet_mask"),
+        router=last_matching_lease.get("router"),
+        lease_duration=last_matching_lease.get("lease_duration"),
+        lease_start=last_matching_lease.get("lease_start"),
+        lease_expiry=last_matching_lease.get("lease_expiry"),
+        interface=last_matching_lease.get("interface", iface_name),
+        source="dhclient lease file",
+    )
+
+
+def parse_nmcli_dhcp(content: str, iface_name: str | None = None) -> DhcpInfo | None:
+    """Parse nmcli -f DHCP4 dev show <iface> output into DhcpInfo."""
+    if not content or not content.strip():
+        return None
+
+    server = None
+    address = None
+    subnet_mask = None
+    router = None
+    lease_duration = None
+    lease_expiry = None
+
+    for line in content.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            k_clean = k.strip().lower()
+            v_clean = v.strip()
+            if "dhcp_server_identifier" in k_clean:
+                server = v_clean
+            elif "ip_address" in k_clean:
+                address = v_clean
+            elif "subnet_mask" in k_clean:
+                subnet_mask = v_clean
+            elif "routers" in k_clean or "router" in k_clean:
+                router = v_clean
+            elif "expiry" in k_clean and v_clean.isdigit():
+                from datetime import datetime, timezone
+                try:
+                    dt = datetime.fromtimestamp(int(v_clean), tz=timezone.utc)
+                    lease_expiry = dt.isoformat()
+                except Exception:
+                    pass
+            elif "lease_time" in k_clean and v_clean.isdigit():
+                lease_duration = int(v_clean)
+
+    if not address and not server:
+        return None
+
+    status = "CONFIGURED" if server else "PARTIAL"
+    return DhcpInfo(
+        enabled=True,
+        status=status,
+        server=server,
+        address=address,
+        subnet_mask=subnet_mask,
+        router=router,
+        lease_duration=lease_duration,
+        lease_expiry=lease_expiry,
+        interface=iface_name,
+        source="nmcli dev show",
+    )
+
+
+def parse_linux_dhcp_route_fallback(
+    routes: list[RouteEntry],
+    iface_name: str | None = None,
+) -> DhcpInfo | None:
+    """Evaluate routing table default routes when DHCP lease files are unavailable.
+
+    Engineering Correction:
+    - Never copies gateway into server.
+    - If default route has proto dhcp -> Status: PARTIAL, Server: None, Router: gateway.
+    - Does not infer NOT_DHCP solely from proto static.
+    """
+    if not routes:
+        return None
+
+    target_route: RouteEntry | None = None
+    # Look for matching default route
+    for r in routes:
+        if r.is_default:
+            if iface_name and r.interface and r.interface.lower() == iface_name.lower():
+                target_route = r
+                break
+            if not target_route:
+                target_route = r
+
+    if not target_route:
+        return None
+
+    if target_route.protocol == "dhcp":
+        return DhcpInfo(
+            enabled=True,
+            status="PARTIAL",
+            server=None,  # NEVER copy gateway into server!
+            router=target_route.gateway,
+            interface=target_route.interface or iface_name,
+            source="iproute2 default route (proto dhcp)",
+            raw_details={"evidence": "Default route uses DHCP-associated route protocol (proto dhcp)."},
+        )
+
+    # If protocol is not dhcp, return UNAVAILABLE rather than inferring NOT_DHCP
+    return DhcpInfo(
+        status="UNAVAILABLE",
+        interface=target_route.interface or iface_name,
+        source="iproute2",
+    )
+
+
+def parse_iw_link(content: str, iface_name: str | None = None) -> WifiInfo:
+    """Parse iw dev <iface> link output into WifiInfo."""
+    if not content or not content.strip():
+        return WifiInfo(interface=iface_name, state="UNAVAILABLE", source="iw dev link")
+
+    if "not connected" in content.lower():
+        return WifiInfo(
+            interface=iface_name,
+            is_wireless_interface=True,
+            state="DISCONNECTED",
+            connected=False,
+            source="iw dev link",
+        )
+
+    bssid_m = re.search(r"Connected to\s+([0-9a-fA-F:]{17})", content)
+    bssid = normalize_bssid(bssid_m.group(1)) if bssid_m else None
+
+    ssid_m = re.search(r"SSID:\s+(.+)", content)
+    ssid = ssid_m.group(1).strip() if ssid_m else None
+
+    freq_m = re.search(r"freq:\s+(\d+)", content)
+    freq = int(freq_m.group(1)) if freq_m else None
+    channel = frequency_to_channel(freq) if freq is not None else None
+
+    sig_m = re.search(r"signal:\s+(-?\d+)\s+dBm", content)
+    signal_dbm = int(sig_m.group(1)) if sig_m else None
+    signal_pct = signal_dbm_to_percent(signal_dbm) if signal_dbm is not None else None
+    signal_dbm_estimated = False
+    signal_percent_estimated = True if signal_pct is not None else False
+
+    rx_m = re.search(r"rx bitrate:\s+([\d.]+)", content)
+    rx_rate = float(rx_m.group(1)) if rx_m else None
+
+    tx_m = re.search(r"tx bitrate:\s+([\d.]+)", content)
+    tx_rate = float(tx_m.group(1)) if tx_m else None
+
+    return WifiInfo(
+        interface=iface_name,
+        ssid=ssid,
+        bssid=bssid,
+        state="CONNECTED",
+        connected=True,
+        is_wireless_interface=True,
+        frequency_mhz=freq,
+        channel=channel,
+        signal_dbm=signal_dbm,
+        signal_percent=signal_pct,
+        signal_dbm_estimated=signal_dbm_estimated,
+        signal_percent_estimated=signal_percent_estimated,
+        rx_rate_mbps=rx_rate,
+        tx_rate_mbps=tx_rate,
+        source="iw dev link",
+    )
+
+
+def parse_nmcli_wifi_detail(content: str, iface_name: str | None = None) -> tuple[str, str | None, str]:
+    """Parse nmcli dev wifi tabular output for active AP security mode and standard."""
+    for line in content.splitlines():
+        line_s = line.strip()
+        if line_s.startswith("yes:") or line_s.startswith("*:") or line_s.lower().startswith("true:"):
+            parts = line_s.split(":")
+            # Format: ACTIVE:SSID:BSSID:MODE:CHAN:FREQ:RATE:SIGNAL:BARS:SECURITY
+            if len(parts) >= 10:
+                sec_raw = parts[-1].strip()
+                sec_mode, clean_raw = normalize_wifi_security(sec_raw)
+                # Check for standard in parts
+                std = "UNKNOWN"
+                for p in parts:
+                    s_norm = normalize_wifi_standard(p)
+                    if s_norm != "UNKNOWN":
+                        std = s_norm
+                        break
+                return sec_mode, clean_raw, std
+
+    return "UNKNOWN", None, "UNKNOWN"
+
+
+# ==============================================================================
+# Phase 7: Linux Neighbor and Socket Parsers
+# ==============================================================================
+
+LINUX_NEIGHBOR_STATE_MAP: dict[str, str] = {
+    "reachable": "REACHABLE",
+    "permanent": "PERMANENT",
+    "stale": "STALE",
+    "delay": "DELAY",
+    "probe": "PROBE",
+    "incomplete": "INCOMPLETE",
+    "failed": "FAILED",
+    "noarp": "PERMANENT",
+    "none": "UNKNOWN",
+}
+
+
+def normalize_linux_neighbor_state(raw_state: Any) -> str:
+    """Normalize Linux neighbor state to canonical state name."""
+    if not raw_state:
+        return "UNKNOWN"
+    s = str(raw_state).strip().lower()
+    return LINUX_NEIGHBOR_STATE_MAP.get(s, str(raw_state).strip().upper() or "UNKNOWN")
+
+
+def parse_linux_ip_neigh_json(
+    json_output: str,
+    target_iface: str | None = None,
+    routing: RoutingInfo | None = None,
+) -> list[NeighborEntry]:
+    """Parse ip -j neigh JSON output into normalized NeighborEntry list."""
+    if not json_output or not json_output.strip():
+        return []
+
+    try:
+        data = json.loads(json_output)
+    except Exception as err:
+        logger.debug("Failed to parse Linux ip -j neigh JSON: %s", err)
+        return []
+
+    if isinstance(data, dict):
+        data = [data]
+    elif not isinstance(data, list):
+        return []
+
+    raw_neighbors: list[NeighborEntry] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        ip_raw = item.get("dst") or item.get("ip")
+        if not ip_raw:
+            continue
+        clean_ip = normalize_ip_string(str(ip_raw)).split("%")[0]
+
+        dev = str(item.get("dev") or "").strip()
+        if target_iface and dev.lower() != target_iface.strip().lower():
+            continue
+
+        # MAC normalization
+        lladdr = item.get("lladdr")
+        if lladdr:
+            norm_mac = normalize_bssid(str(lladdr))
+            if not norm_mac or norm_mac == "00:00:00:00:00:00":
+                mac_address = "UNKNOWN"
+            else:
+                mac_address = norm_mac
+        else:
+            mac_address = "UNKNOWN"
+
+        # State normalization (handle list vs string)
+        raw_state = item.get("state")
+        is_router = False
+
+        if isinstance(raw_state, list):
+            # Check if ROUTER is present in state list
+            states: list[str] = []
+            for s in raw_state:
+                s_str = str(s).strip()
+                if s_str.upper() == "ROUTER":
+                    is_router = True
+                else:
+                    states.append(s_str)
+            if states:
+                state = normalize_linux_neighbor_state(states[0])
+            else:
+                state = "UNKNOWN"
+        elif isinstance(raw_state, str):
+            if raw_state.strip().upper() == "ROUTER":
+                is_router = True
+                state = "UNKNOWN"
+            else:
+                state = normalize_linux_neighbor_state(raw_state)
+        else:
+            state = "UNKNOWN"
+
+        # Check router flags
+        if item.get("router") is True:
+            is_router = True
+        flags = item.get("flags")
+        if isinstance(flags, list) and any(str(f).strip().lower() == "router" for f in flags):
+            is_router = True
+        elif is_gateway_match(clean_ip, dev, routing):
+            is_router = True
+
+        raw_neighbors.append(
+            NeighborEntry(
+                ip_address=clean_ip,
+                mac_address=mac_address,
+                interface=dev,
+                state=state,
+                is_router=is_router,
+            )
+        )
+
+    deduped = deduplicate_neighbors(raw_neighbors)
+    return sort_neighbors(deduped)
+
+
+def parse_linux_ip_neigh_text(
+    text_output: str,
+    target_iface: str | None = None,
+    routing: RoutingInfo | None = None,
+) -> list[NeighborEntry]:
+    """Parse ip neigh text output into normalized NeighborEntry list."""
+    if not text_output or not text_output.strip():
+        return []
+
+    raw_neighbors: list[NeighborEntry] = []
+    for line in text_output.splitlines():
+        tokens = line.strip().split()
+        if len(tokens) < 3:
+            continue
+
+        ip_raw = tokens[0]
+        clean_ip = normalize_ip_string(ip_raw).split("%")[0]
+        if not clean_ip:
+            continue
+
+        if "dev" not in tokens:
+            continue
+        dev_idx = tokens.index("dev")
+        if dev_idx + 1 >= len(tokens):
+            continue
+        dev = tokens[dev_idx + 1]
+
+        if target_iface and dev.lower() != target_iface.strip().lower():
+            continue
+
+        mac_address = "UNKNOWN"
+        if "lladdr" in tokens:
+            mac_idx = tokens.index("lladdr")
+            if mac_idx + 1 < len(tokens):
+                m = normalize_bssid(tokens[mac_idx + 1])
+                if m and m != "00:00:00:00:00:00":
+                    mac_address = m
+
+        is_router = False
+        lower_tokens = [t.lower() for t in tokens]
+        if "router" in lower_tokens:
+            is_router = True
+        elif is_gateway_match(clean_ip, dev, routing):
+            is_router = True
+
+        # State is typically the last token (or token before router)
+        state = "UNKNOWN"
+        for t in reversed(tokens):
+            lt = t.lower()
+            if lt in LINUX_NEIGHBOR_STATE_MAP:
+                state = LINUX_NEIGHBOR_STATE_MAP[lt]
+                break
+            elif lt not in ("router", "dev", "lladdr", "nud") and lt != dev.lower():
+                state = lt.upper()
+                break
+
+        raw_neighbors.append(
+            NeighborEntry(
+                ip_address=clean_ip,
+                mac_address=mac_address,
+                interface=dev,
+                state=state,
+                is_router=is_router,
+            )
+        )
+
+    deduped = deduplicate_neighbors(raw_neighbors)
+    return sort_neighbors(deduped)
+
+
+def parse_linux_proc_arp(
+    proc_output: str,
+    target_iface: str | None = None,
+    routing: RoutingInfo | None = None,
+) -> list[NeighborEntry]:
+    """Parse /proc/net/arp table content into normalized NeighborEntry list."""
+    if not proc_output or not proc_output.strip():
+        return []
+
+    raw_neighbors: list[NeighborEntry] = []
+    lines = proc_output.strip().splitlines()
+    for line in lines:
+        sline = line.strip()
+        if not sline or sline.startswith("IP address"):
+            continue
+
+        parts = sline.split()
+        # Columns: IP address, HW type, Flags, HW address, Mask, Device
+        if len(parts) < 6:
+            continue
+
+        clean_ip = normalize_ip_string(parts[0]).split("%")[0]
+        flags_raw = parts[2]
+        hw_addr = parts[3]
+        dev = parts[5]
+
+        if target_iface and dev.lower() != target_iface.strip().lower():
+            continue
+
+        try:
+            flags = int(flags_raw, 16)
+        except (ValueError, TypeError):
+            flags = 0
+
+        # ATF_PERM = 0x04, ATF_COM = 0x02
+        if flags & 0x04:
+            state = "PERMANENT"
+        elif flags & 0x02:
+            state = "REACHABLE"
+        else:
+            state = "INCOMPLETE"
+
+        norm_mac = normalize_bssid(hw_addr)
+        if not norm_mac or norm_mac == "00:00:00:00:00:00" or state == "INCOMPLETE":
+            mac_address = "UNKNOWN"
+        else:
+            mac_address = norm_mac
+
+        is_router = is_gateway_match(clean_ip, dev, routing)
+
+        raw_neighbors.append(
+            NeighborEntry(
+                ip_address=clean_ip,
+                mac_address=mac_address,
+                interface=dev,
+                state=state,
+                is_router=is_router,
+            )
+        )
+
+    deduped = deduplicate_neighbors(raw_neighbors)
+    return sort_neighbors(deduped)
+
+
+LINUX_TCP_STATE_MAP: dict[str, str] = {
+    "listen": "LISTEN",
+    "estab": "ESTABLISHED",
+    "established": "ESTABLISHED",
+    "syn-sent": "SYN_SENT",
+    "syn-recv": "SYN_RECEIVED",
+    "fin-wait-1": "FIN_WAIT1",
+    "fin-wait-2": "FIN_WAIT2",
+    "time-wait": "TIME_WAIT",
+    "close": "CLOSE",
+    "close-wait": "CLOSE_WAIT",
+    "last-ack": "LAST_ACK",
+    "closing": "CLOSING",
+    "unknown": "UNKNOWN",
+}
+
+
+def normalize_linux_tcp_state(raw_state: Any) -> str:
+    """Normalize Linux ss TCP state to canonical state name."""
+    if not raw_state:
+        return "UNKNOWN"
+    s = str(raw_state).strip().lower()
+    return LINUX_TCP_STATE_MAP.get(s, str(raw_state).strip().upper() or "UNKNOWN")
+
+
+def parse_linux_ss(stdout: str) -> list[SocketEntry]:
+    """Parse ss -tunapn -H output into normalized SocketEntry list."""
+    if not stdout or not stdout.strip():
+        return []
+
+    sockets: list[SocketEntry] = []
+    for line in stdout.splitlines():
+        sline = line.strip()
+        if not sline:
+            continue
+
+        parts = sline.split(None, 6)
+        # We need at least 6 tokens: Netid, State, Recv-Q, Send-Q, Local Address:Port, Peer Address:Port
+        if len(parts) < 6:
+            continue
+
+        netid = parts[0].lower()
+        raw_state = parts[1]
+        laddr_token = parts[4]
+        raddr_token = parts[5]
+
+        if netid.startswith("tcp"):
+            proto = "TCP"
+        elif netid.startswith("udp"):
+            proto = "UDP"
+        else:
+            proto = netid.upper()
+
+        # Parse local address & port
+        if ":" not in laddr_token:
+            continue
+        raw_laddr, raw_lport = laddr_token.rsplit(":", 1)
+        if raw_laddr.startswith("[") and raw_laddr.endswith("]"):
+            raw_laddr = raw_laddr[1:-1]
+        if raw_laddr == "*":
+            raw_laddr = "::" if ":" in raw_laddr or "6" in netid else "0.0.0.0"
+
+        try:
+            local_port = int(raw_lport)
+        except (ValueError, TypeError):
+            continue
+
+        local_addr = normalize_ip_string(raw_laddr)
+
+        # Parse state
+        if proto == "UDP":
+            state = "UNKNOWN"  # Do not fabricate LISTENING for UDP
+        else:
+            state = normalize_linux_tcp_state(raw_state)
+
+        # Parse remote address & port
+        if state == "LISTEN" or proto == "UDP":
+            remote_addr = None
+            remote_port = None
+        else:
+            if ":" in raddr_token:
+                raw_raddr, raw_rport = raddr_token.rsplit(":", 1)
+                if raw_raddr.startswith("[") and raw_raddr.endswith("]"):
+                    raw_raddr = raw_raddr[1:-1]
+                if raw_raddr in ("*", "0.0.0.0", "::") and raw_rport == "*":
+                    remote_addr = None
+                    remote_port = None
+                else:
+                    remote_addr = normalize_ip_string(raw_raddr)
+                    try:
+                        remote_port = int(raw_rport)
+                    except (ValueError, TypeError):
+                        remote_port = None
+            else:
+                remote_addr = None
+                remote_port = None
+
+        # Process attribution via users:(("name",pid=...,fd=...))
+        pid: int | None = None
+        pname: str | None = None
+        proc_match = re.search(r'users:\(\((?:"([^"]+)"|([^,]+)),pid=(\d+)', sline)
+        if proc_match:
+            pname = proc_match.group(1) or proc_match.group(2)
+            try:
+                pid = int(proc_match.group(3))
+            except (ValueError, TypeError):
+                pid = None
+
+        sockets.append(
+            SocketEntry(
+                protocol=proto,
+                local_address=local_addr,
+                local_port=local_port,
+                remote_address=remote_addr,
+                remote_port=remote_port,
+                state=state,
+                pid=pid,
+                process_name=pname,
+            )
+        )
+
+    return sort_sockets(sockets)
+
