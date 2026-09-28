@@ -1053,3 +1053,60 @@ def parse_tshark_dns_output(tsv_output: str) -> PcapDnsSummary:
         top_queries=top_queries,
         records=records,
     )
+
+
+def parse_tshark_http_output(tsv_output: str) -> PcapHttpSummary:
+    """Parse fields from TShark HTTP metadata extraction (metadata only, zero credentials)."""
+    req_count = 0
+    resp_count = 0
+    methods: Counter[str] = Counter()
+    status_codes: Counter[str] = Counter()
+    hosts: Counter[str] = Counter()
+    requests: list[dict[str, Any]] = []
+
+    for line in tsv_output.splitlines():
+        parts = line.split("\t")
+        # Fields: frame.number, ip.src, ip.dst, http.request.method, http.host, http.request.uri.path, http.response.code
+        if len(parts) < 4:
+            continue
+
+        frame_num = parts[0]
+        src = parts[1]
+        dst = parts[2]
+        method = parts[3].strip() if len(parts) > 3 else ""
+        host = parts[4].strip() if len(parts) > 4 else ""
+        raw_path = parts[5].strip() if len(parts) > 5 else ""
+        # Strictly ensure no query string parameters (?token=... etc.) leak into URI path
+        path = raw_path.split("?")[0] if raw_path else ""
+        status_code = parts[6].strip() if len(parts) > 6 else ""
+
+        if method:
+            req_count += 1
+            methods[method] += 1
+        if host:
+            hosts[host] += 1
+        if status_code:
+            resp_count += 1
+            status_codes[status_code] += 1
+
+        if len(requests) < 100 and (method or status_code):
+            requests.append({
+                "frame": frame_num,
+                "source": src,
+                "destination": dst,
+                "method": method or None,
+                "host": host or None,
+                "path": path or None,
+                "status_code": int(status_code) if status_code.isdigit() else None,
+            })
+
+    top_hosts = [{"host": h, "count": count} for h, count in hosts.most_common(10)]
+
+    return PcapHttpSummary(
+        request_count=req_count,
+        response_count=resp_count,
+        methods=dict(sorted(methods.items())),
+        status_codes=dict(sorted(status_codes.items())),
+        top_hosts=top_hosts,
+        requests=requests,
+    )
