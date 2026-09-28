@@ -676,3 +676,5 @@ def test_pcap_analysis_info_to_dict():
     assert d["tcp_summary"]["syn_flag_count"] == 1
     assert len(d["packet_samples"]) == 1
     assert len(d["timeline"]) == 1
+
+# Bounded subprocess cutoff and URI privacy regression tests

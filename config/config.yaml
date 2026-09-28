@@ -71,3 +71,5 @@ pcap:
 # Connectivity diagnostic probe targets and timeout thresholds
 
 # Connectivity timeout boundary validation
+
+# PCAP bounded analysis thresholds
