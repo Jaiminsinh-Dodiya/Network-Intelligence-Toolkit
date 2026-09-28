@@ -964,3 +964,92 @@ def parse_tshark_conversations(output: str, proto: str) -> list[PcapConversation
         )
 
     return conversations
+
+
+def parse_tshark_dns_output(tsv_output: str) -> PcapDnsSummary:
+    """Parse fields from TShark DNS metadata extraction."""
+    query_count = 0
+    response_count = 0
+    rcodes: Counter[str] = Counter()
+    qtypes: Counter[str] = Counter()
+    qnames: Counter[str] = Counter()
+    records: list[dict[str, Any]] = []
+
+    rcode_names = {
+        "0": "NOERROR",
+        "1": "FORMERR",
+        "2": "SERVFAIL",
+        "3": "NXDOMAIN",
+        "4": "NOTIMP",
+        "5": "REFUSED",
+    }
+
+    qtype_names = {
+        "1": "A",
+        "2": "NS",
+        "5": "CNAME",
+        "6": "SOA",
+        "12": "PTR",
+        "15": "MX",
+        "16": "TXT",
+        "28": "AAAA",
+        "33": "SRV",
+        "65": "HTTPS",
+    }
+
+    for line in tsv_output.splitlines():
+        parts = line.split("\t")
+        # Fields: frame.number, ip.src, ip.dst, dns.id, dns.flags.response, dns.qry.name, dns.qry.type, dns.flags.rcode
+        if len(parts) < 6:
+            continue
+
+        frame_num = parts[0]
+        src = parts[1]
+        dst = parts[2]
+        tx_id = parts[3] if len(parts) > 3 else ""
+        is_resp = parts[4].strip() if len(parts) > 4 else ""
+        qname = parts[5].strip() if len(parts) > 5 else ""
+        qtype_raw = parts[6].strip() if len(parts) > 6 else ""
+        rcode_raw = parts[7].strip() if len(parts) > 7 else ""
+
+        is_response_bool = is_resp in ("1", "True", "true")
+        if is_response_bool:
+            response_count += 1
+            rcode_mapped = rcode_names.get(rcode_raw, rcode_raw or "NOERROR")
+            rcodes[rcode_mapped] += 1
+        else:
+            query_count += 1
+
+        if qname:
+            qnames[qname] += 1
+
+        if qtype_raw:
+            qtype_mapped = qtype_names.get(qtype_raw, qtype_raw)
+            qtypes[qtype_mapped] += 1
+
+        if len(records) < 100 and qname:
+            records.append({
+                "frame": frame_num,
+                "source": src,
+                "destination": dst,
+                "transaction_id": tx_id,
+                "is_response": is_response_bool,
+                "query_name": qname,
+                "query_type": qtype_names.get(qtype_raw, qtype_raw),
+                "response_code": rcode_names.get(rcode_raw, rcode_raw) if is_response_bool else None,
+            })
+
+    top_queries = [{"name": name, "count": count} for name, count in qnames.most_common(10)]
+
+    unresolved = max(0, query_count - response_count)
+    return PcapDnsSummary(
+        query_count=query_count,
+        response_count=response_count,
+        total_queries=query_count,
+        total_responses=response_count,
+        unresolved_queries=unresolved,
+        response_codes=dict(sorted(rcodes.items())),
+        query_types=dict(sorted(qtypes.items())),
+        top_queries=top_queries,
+        records=records,
+    )
