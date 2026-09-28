@@ -1398,3 +1398,5 @@ def sort_conversations(convs: list[PcapConversationStat]) -> list[PcapConversati
 # Enforce -c max_packets at invocation level
 
 # Enforce http.request.uri.path privacy boundary
+
+# Subprocess termination and reader thread drain safety
