@@ -1228,3 +1228,165 @@ def parse_tshark_tcp_output(tsv_output: str) -> PcapTcpSummary:
         duplicate_ack_count=dup_ack_count,
         zero_window_count=zero_win_count,
     )
+
+
+def parse_tshark_packet_samples_and_timeline(
+    tsv_output: str,
+    sample_limit: int,
+    interval_seconds: float = 1.0,
+) -> tuple[list[PcapPacketSample], list[PcapTrafficTimelineBucket], dict[str, Any]]:
+    """Parse packet sample list, generate timeline buckets, and compute summary statistics."""
+    samples: list[PcapPacketSample] = []
+    bucket_map: dict[int, list[int]] = {}  # bucket_index -> [packet_count, byte_count]
+
+    total_pkts = 0
+    total_bytes = 0
+    pkt_sizes: list[int] = []
+    first_epoch: float | None = None
+    last_epoch: float | None = None
+
+    for line in tsv_output.splitlines():
+        parts = line.split("\t")
+        # Fields:
+        # 0: frame.number
+        # 1: frame.time_epoch
+        # 2: frame.time_relative
+        # 3: ip.src
+        # 4: ipv6.src
+        # 5: tcp.srcport
+        # 6: udp.srcport
+        # 7: ip.dst
+        # 8: ipv6.dst
+        # 9: tcp.dstport
+        # 10: udp.dstport
+        # 11: _ws.col.Protocol
+        # 12: frame.len
+        # 13: _ws.col.Info
+        if len(parts) < 13:
+            continue
+
+        try:
+            frame_num = int(parts[0])
+            epoch = float(parts[1]) if parts[1].strip() else 0.0
+            rel_time = float(parts[2]) if parts[2].strip() else 0.0
+            pkt_len = int(parts[12]) if parts[12].strip() else 0
+        except (ValueError, TypeError):
+            continue
+
+        total_pkts += 1
+        total_bytes += pkt_len
+        pkt_sizes.append(pkt_len)
+
+        if first_epoch is None or epoch < first_epoch:
+            first_epoch = epoch
+        if last_epoch is None or epoch > last_epoch:
+            last_epoch = epoch
+
+        # Timeline bucketing
+        b_idx = int(rel_time // interval_seconds) if interval_seconds > 0 else 0
+        if b_idx not in bucket_map:
+            bucket_map[b_idx] = [0, 0]
+        bucket_map[b_idx][0] += 1
+        bucket_map[b_idx][1] += pkt_len
+
+        # Bounded packet samples
+        if len(samples) < sample_limit:
+            src_addr = parts[3].strip() or parts[4].strip()
+            src_port = int(parts[5].strip() or parts[6].strip()) if (parts[5].strip() or parts[6].strip()) else None
+            dst_addr = parts[7].strip() or parts[8].strip()
+            dst_port = int(parts[9].strip() or parts[10].strip()) if (parts[9].strip() or parts[10].strip()) else None
+            proto = parts[11].strip()
+            info = parts[13].strip() if len(parts) > 13 else ""
+
+            samples.append(
+                PcapPacketSample(
+                    frame_number=frame_num,
+                    timestamp=f"{epoch:.6f}" if epoch > 0 else None,
+                    relative_time=rel_time,
+                    source=normalize_ip_string(src_addr),
+                    source_port=src_port,
+                    destination=normalize_ip_string(dst_addr),
+                    destination_port=dst_port,
+                    protocol=proto,
+                    length=pkt_len,
+                    info=info,
+                )
+            )
+
+    # Compile timeline (bounded to 300 buckets maximum)
+    timeline: list[PcapTrafficTimelineBucket] = []
+    for b_idx in sorted(bucket_map.keys())[:300]:
+        pkts, b_bytes = bucket_map[b_idx]
+        timeline.append(
+            PcapTrafficTimelineBucket(
+                bucket_index=b_idx,
+                start_time=round(b_idx * interval_seconds, 2),
+                end_time=round((b_idx + 1) * interval_seconds, 2),
+                packet_count=pkts,
+                byte_count=b_bytes,
+            )
+        )
+
+    duration = round(last_epoch - first_epoch, 4) if (first_epoch and last_epoch and last_epoch >= first_epoch) else 0.0
+    avg_size = round(total_bytes / total_pkts, 1) if total_pkts > 0 else 0.0
+    min_size = min(pkt_sizes) if pkt_sizes else 0
+    max_size = max(pkt_sizes) if pkt_sizes else 0
+    pkts_sec = round(total_pkts / duration, 1) if duration > 0 else None
+    bytes_sec = round(total_bytes / duration, 1) if duration > 0 else None
+
+    from datetime import datetime, timezone
+    start_iso = datetime.fromtimestamp(first_epoch, timezone.utc).isoformat() if first_epoch else None
+    end_iso = datetime.fromtimestamp(last_epoch, timezone.utc).isoformat() if last_epoch else None
+
+    stats = {
+        "total_packets": total_pkts,
+        "total_bytes": total_bytes,
+        "capture_start": start_iso,
+        "capture_end": end_iso,
+        "duration_seconds": duration,
+        "average_packet_size": avg_size,
+        "min_packet_size": min_size,
+        "max_packet_size": max_size,
+        "packets_per_second": pkts_sec,
+        "bytes_per_second": bytes_sec,
+        "link_types": ["Ethernet"],
+    }
+
+    return samples, timeline, stats
+
+
+# ==============================================================================
+# Deterministic Sorting Utilities
+# ==============================================================================
+
+def sort_endpoints(endpoints: list[PcapEndpointStat]) -> list[PcapEndpointStat]:
+    """Deterministically sort endpoints by packet count descending, then IP address."""
+    import ipaddress
+
+    def key_fn(e: PcapEndpointStat) -> tuple:
+        clean = e.address.split("%")[0]
+        try:
+            ip_obj = ipaddress.ip_address(clean)
+            ver = ip_obj.version
+            num = int(ip_obj)
+        except ValueError:
+            ver = 99
+            num = clean
+        return (-e.packet_count, ver, num)
+
+    return sorted(endpoints, key=key_fn)
+
+
+def sort_conversations(convs: list[PcapConversationStat]) -> list[PcapConversationStat]:
+    """Deterministically sort conversations by packet count descending, then endpoints."""
+    return sorted(
+        convs,
+        key=lambda c: (
+            -c.packet_count,
+            c.protocol.upper(),
+            c.source,
+            c.source_port,
+            c.destination,
+            c.destination_port,
+        ),
+    )
