@@ -982,6 +982,243 @@ class PcapTlsSummary:
 
 
 @dataclass
+class PcapTcpSummary:
+    """Aggregated TCP control flags and transmission metrics."""
+    conversation_count: int = 0
+    syn_count: int = 0
+    syn_flag_count: int = 0
+    syn_ack_count: int = 0
+    ack_count: int = 0
+    rst_count: int = 0
+    rst_flag_count: int = 0
+    fin_count: int = 0
+    retransmission_count: int = 0
+    retransmissions: int = 0
+    duplicate_ack_count: int = 0
+    duplicate_acks: int = 0
+    zero_window_count: int = 0
+    zero_window_advertisements: int = 0
+
+    def __post_init__(self) -> None:
+        if self.retransmissions == 0 and self.retransmission_count:
+            self.retransmissions = self.retransmission_count
+        elif self.retransmission_count == 0 and self.retransmissions:
+            self.retransmission_count = self.retransmissions
+
+        if self.duplicate_acks == 0 and self.duplicate_ack_count:
+            self.duplicate_acks = self.duplicate_ack_count
+        elif self.duplicate_ack_count == 0 and self.duplicate_acks:
+            self.duplicate_ack_count = self.duplicate_acks
+
+        if self.zero_window_advertisements == 0 and self.zero_window_count:
+            self.zero_window_advertisements = self.zero_window_count
+        elif self.zero_window_count == 0 and self.zero_window_advertisements:
+            self.zero_window_count = self.zero_window_advertisements
+
+        if self.rst_flag_count == 0 and self.rst_count:
+            self.rst_flag_count = self.rst_count
+        elif self.rst_count == 0 and self.rst_flag_count:
+            self.rst_count = self.rst_flag_count
+
+        if self.syn_flag_count == 0 and self.syn_count:
+            self.syn_flag_count = self.syn_count
+        elif self.syn_count == 0 and self.syn_flag_count:
+            self.syn_count = self.syn_flag_count
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class PcapPacketSample:
+    """Bounded packet summary entry."""
+    frame_number: int
+    timestamp: str | None = None
+    timestamp_epoch: float | None = None
+    relative_time: float | None = None
+    source: str = ""
+    src: str = ""
+    source_port: int | None = None
+    destination: str = ""
+    dst: str = ""
+    destination_port: int | None = None
+    protocol: str = ""
+    length: int = 0
+    length_bytes: int = 0
+    info: str = ""
+    summary: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.src and self.source:
+            self.src = self.source
+        elif not self.source and self.src:
+            self.source = self.src
+
+        if not self.dst and self.destination:
+            self.dst = self.destination
+        elif not self.destination and self.dst:
+            self.destination = self.dst
+
+        if self.length == 0 and self.length_bytes:
+            self.length = self.length_bytes
+        elif self.length_bytes == 0 and self.length:
+            self.length_bytes = self.length
+
+        if not self.summary and self.info:
+            self.summary = self.info
+        elif not self.info and self.summary:
+            self.info = self.summary
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class PcapTrafficTimelineBucket:
+    """Bounded traffic interval bucket."""
+    bucket_index: int = 0
+    start_time: float = 0.0
+    end_time: float = 0.0
+    timestamp_start: float = 0.0
+    timestamp_end: float = 0.0
+    packet_count: int = 0
+    byte_count: int = 0
+
+    def __post_init__(self) -> None:
+        if self.timestamp_start == 0.0 and self.start_time:
+            self.timestamp_start = self.start_time
+        elif self.start_time == 0.0 and self.timestamp_start:
+            self.start_time = self.timestamp_start
+
+        if self.timestamp_end == 0.0 and self.end_time:
+            self.timestamp_end = self.end_time
+        elif self.end_time == 0.0 and self.timestamp_end:
+            self.end_time = self.timestamp_end
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+VALID_PCAP_STATUSES: set[str] = {
+    "AVAILABLE",
+    "PARTIAL",
+    "ERROR",
+    "UNAVAILABLE",
+    "DISABLED",
+}
+
+
+@dataclass
+class PcapAnalysisInfo:
+    """Normalized result of authorized PCAP/PCAPNG offline packet analysis."""
+    file_path: str
+    file_format: str | None = None
+    file_size_bytes: int | None = None
+    analyzed_packets: int = 0
+    packet_count: int = 0
+    capture_start: str | None = None
+    capture_end: str | None = None
+    duration_seconds: float | None = None
+    link_types: list[str] = field(default_factory=list)
+    protocols: list[Any] = field(default_factory=list)
+    endpoints: list[Any] = field(default_factory=list)
+    conversations: list[Any] = field(default_factory=list)
+    dns: Any = None
+    http: Any = None
+    tls: Any = None
+    tcp: Any = None
+    dns_summary: Any = None
+    http_summary: Any = None
+    tls_summary: Any = None
+    tcp_summary: Any = None
+    packet_samples: list[Any] = field(default_factory=list)
+    filters_applied: list[str] = field(default_factory=list)
+    truncated: bool = False
+    status: str = "AVAILABLE"  # AVAILABLE, PARTIAL, ERROR, UNAVAILABLE, DISABLED
+    reason: str | None = None
+    error: str | None = None
+    available: bool = True
+    packets_dropped: int | None = 0
+    avg_packet_rate_pps: float | None = None
+    avg_bit_rate_bps: float | None = None
+    total_packets: int = 0
+    total_bytes: int = 0
+    average_packet_size: float | None = None
+    min_packet_size: int | None = None
+    max_packet_size: int | None = None
+    packets_per_second: float | None = None
+    bytes_per_second: float | None = None
+    timeline: list[Any] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.status not in VALID_PCAP_STATUSES:
+            raise ValueError(
+                f"Invalid PCAP analysis status: '{self.status}'. "
+                f"Must be one of {sorted(VALID_PCAP_STATUSES)}"
+            )
+
+        if self.packet_count == 0 and self.analyzed_packets:
+            self.packet_count = self.analyzed_packets
+        elif self.analyzed_packets == 0 and self.packet_count:
+            self.analyzed_packets = self.packet_count
+
+        if self.total_packets == 0 and self.packet_count:
+            self.total_packets = self.packet_count
+        elif self.packet_count == 0 and self.total_packets:
+            self.packet_count = self.total_packets
+
+        if self.dns_summary is None and self.dns is not None:
+            self.dns_summary = self.dns
+        elif self.dns is None and self.dns_summary is not None:
+            self.dns = self.dns_summary
+
+        if self.http_summary is None and self.http is not None:
+            self.http_summary = self.http
+        elif self.http is None and self.http_summary is not None:
+            self.http = self.http_summary
+
+        if self.tls_summary is None and self.tls is not None:
+            self.tls_summary = self.tls
+        elif self.tls is None and self.tls_summary is not None:
+            self.tls = self.tls_summary
+
+        if self.tcp_summary is None and self.tcp is not None:
+            self.tcp_summary = self.tcp
+        elif self.tcp is None and self.tcp_summary is not None:
+            self.tcp = self.tcp_summary
+
+        if self.reason is None and self.error is not None:
+            self.reason = self.error
+        elif self.error is None and self.reason is not None:
+            self.error = self.reason
+
+        if self.status in ("UNAVAILABLE", "ERROR", "DISABLED"):
+            self.available = False
+        else:
+            self.available = True
+
+    def to_dict(self) -> dict[str, Any]:
+        def _ser(v: Any) -> Any:
+            if hasattr(v, "to_dict"):
+                return v.to_dict()
+            if isinstance(v, list):
+                return [_ser(item) for item in v]
+            if isinstance(v, dict):
+                return {k: _ser(val) for k, val in v.items()}
+            return v
+
+        res = dataclasses.asdict(self)
+        res["available"] = self.available
+        res["packet_count"] = self.packet_count
+        if self.dns_summary:
+            res["dns_summary"] = _ser(self.dns_summary)
+        if self.http_summary:
+            res["http_summary"] = _ser(self.http_summary)
+        if self.tls_summary:
+            res["tls_summary"] = _ser(self.tls_summary)
+        if self.tcp_summary:
+            res["tcp_summary"] = _ser(self.tcp_summary)
+        return res
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
