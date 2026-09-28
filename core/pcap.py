@@ -108,3 +108,141 @@ def validate_capture_file(
         return True, "CAP", None
 
     return False, None, "Unrecognized or invalid capture file format (neither standard PCAP nor PCAPNG header)"
+
+
+def run_bounded_subprocess(
+    cmd: list[str],
+    timeout: float,
+    max_output_bytes: int,
+) -> tuple[int, str, str, bool]:
+    """Execute a subprocess while incrementally reading stdout/stderr with a hard output byte limit.
+
+    Guarantees:
+    - Never passes shell=True
+    - Stops immediately and terminates process if cumulative output reaches max_output_bytes
+    - Hardened bounded grace period with force-kill and reaping on overflow
+    - Safely enforces timeouts
+    - Returns (returncode, stdout, stderr, was_truncated)
+    """
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+        )
+    except FileNotFoundError:
+        return 127, "", "Executable not found", False
+    except Exception as err:
+        return 1, "", f"Failed to launch process: {err}", False
+
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    total_bytes = 0
+    truncated = False
+    lock = threading.Lock()
+    stop_event = threading.Event()
+
+    def reader(stream: Any, chunks: list[bytes]) -> None:
+        nonlocal total_bytes, truncated
+        try:
+            while not stop_event.is_set():
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                with lock:
+                    total_bytes += len(chunk)
+                    if total_bytes > max_output_bytes:
+                        truncated = True
+                        excess = total_bytes - max_output_bytes
+                        allowed = len(chunk) - excess
+                        if allowed > 0:
+                            chunks.append(chunk[:allowed])
+                        stop_event.set()
+                        break
+                    else:
+                        chunks.append(chunk)
+        except Exception:
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    t_out = threading.Thread(target=reader, args=(proc.stdout, stdout_chunks), daemon=True)
+    t_err = threading.Thread(target=reader, args=(proc.stderr, stderr_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    start_time = time.monotonic()
+    timed_out = False
+
+    while True:
+        # Check if output limit was hit
+        if stop_event.is_set():
+            # 1. Output overflow: stop accepting further output (stop_event already set)
+            # 2. Request subprocess termination
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            # 3. Wait only a bounded grace period (1.0s)
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                # 4. Force-kill if it remains alive
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                # 5. Reap the process
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            break
+
+        # Check if process exited on its own
+        try:
+            proc.wait(timeout=0.05)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Check overall execution timeout
+        if (time.monotonic() - start_time) >= timeout:
+            timed_out = True
+            stop_event.set()
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            break
+
+    # Ensure streams are closed
+    try:
+        if proc.stdout:
+            proc.stdout.close()
+    except Exception:
+        pass
+    try:
+        if proc.stderr:
+            proc.stderr.close()
+    except Exception:
+        pass
+
+    t_out.join(timeout=0.5)
+    t_err.join(timeout=0.5)
+
+    if timed_out:
+        return -1, "", f"TShark analysis execution timed out after {timeout:.1f}s", False
+
+    out_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+    err_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+    return proc.returncode if proc.returncode is not None else 0, out_str, err_str, truncated
