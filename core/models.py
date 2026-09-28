@@ -887,6 +887,101 @@ class PcapConversationStat:
 
 
 @dataclass
+class PcapDnsSummary:
+    """Aggregated DNS query and response intelligence."""
+    query_count: int = 0
+    response_count: int = 0
+    total_queries: int = 0
+    total_responses: int = 0
+    unresolved_queries: int = 0
+    response_codes: dict[str, int] = field(default_factory=dict)
+    query_types: dict[str, int] = field(default_factory=dict)
+    top_queries: list[dict[str, Any]] = field(default_factory=list)
+    top_queried_domains: list[tuple[str, int]] = field(default_factory=list)
+    records: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.total_queries == 0 and self.query_count:
+            self.total_queries = self.query_count
+        elif self.query_count == 0 and self.total_queries:
+            self.query_count = self.total_queries
+
+        if self.total_responses == 0 and self.response_count:
+            self.total_responses = self.response_count
+        elif self.response_count == 0 and self.total_responses:
+            self.response_count = self.total_responses
+
+        if not self.top_queried_domains and self.top_queries:
+            self.top_queried_domains = [
+                (q["name"], q["count"]) for q in self.top_queries if isinstance(q, dict) and "name" in q and "count" in q
+            ]
+        elif not self.top_queries and self.top_queried_domains:
+            self.top_queries = [{"name": dom, "count": cnt} for dom, cnt in self.top_queried_domains]
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class PcapHttpSummary:
+    """Aggregated HTTP metadata (strictly excluding credentials/cookies/bodies)."""
+    request_count: int = 0
+    response_count: int = 0
+    total_requests: int = 0
+    total_responses: int = 0
+    methods: dict[str, int] = field(default_factory=dict)
+    status_codes: Any = field(default_factory=dict)
+    top_hosts: Any = field(default_factory=list)
+    top_methods: list[tuple[str, int]] = field(default_factory=list)
+    requests: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.total_requests == 0 and self.request_count:
+            self.total_requests = self.request_count
+        elif self.request_count == 0 and self.total_requests:
+            self.request_count = self.total_requests
+
+        if self.total_responses == 0 and self.response_count:
+            self.total_responses = self.response_count
+        elif self.response_count == 0 and self.total_responses:
+            self.response_count = self.total_responses
+
+        if not self.top_methods and self.methods:
+            self.top_methods = [(m, cnt) for m, cnt in self.methods.items()]
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class PcapTlsSummary:
+    """Aggregated TLS handshake metadata (strictly excluding private keys/secrets)."""
+    session_count: int = 0
+    total_sessions: int = 0
+    versions: dict[str, int] = field(default_factory=dict)
+    tls_versions: list[tuple[str, int]] = field(default_factory=list)
+    sni_list: list[str] = field(default_factory=list)
+    top_server_names: list[tuple[str, int]] = field(default_factory=list)
+    cipher_suites: dict[str, int] = field(default_factory=dict)
+    sessions: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.total_sessions == 0 and self.session_count:
+            self.total_sessions = self.session_count
+        elif self.session_count == 0 and self.total_sessions:
+            self.session_count = self.total_sessions
+
+        if not self.tls_versions and self.versions:
+            self.tls_versions = [(v, cnt) for v, cnt in self.versions.items()]
+
+        if not self.top_server_names and self.sni_list:
+            self.top_server_names = [(sni, 1) for sni in self.sni_list]
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
 
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
