@@ -792,3 +792,42 @@ class PcapAnalyzer:
 # ==============================================================================
 # Helper Parsers for TShark Outputs
 # ==============================================================================
+
+def parse_tshark_protocol_hierarchy(output: str) -> list[PcapProtocolStat]:
+    """Parse output of tshark -q -z io,phs."""
+    protocols: list[PcapProtocolStat] = []
+    lines = output.strip().splitlines()
+
+    in_table = False
+    for line in lines:
+        if "Protocol Hierarchy Statistics" in line or "Filter:" in line:
+            in_table = True
+            continue
+        if "===" in line:
+            continue
+        if not in_table or not line.strip():
+            continue
+
+        # Format example:
+        # eth                                      frames:100 bytes:15000
+        #   ip                                     frames:90 bytes:14000
+        m = re.search(r"^\s*([a-zA-Z0-9_\-]+)\s+frames:(\d+)\s+bytes:(\d+)", line)
+        if m:
+            proto_name = m.group(1).strip()
+            frames = int(m.group(2))
+            byte_count = int(m.group(3))
+            protocols.append(
+                PcapProtocolStat(
+                    protocol=proto_name,
+                    packet_count=frames,
+                    byte_count=byte_count,
+                )
+            )
+
+    # Calculate percentages relative to topmost protocol
+    if protocols:
+        top_frames = protocols[0].packet_count or 1
+        for p in protocols:
+            p.percentage = round((p.packet_count / top_frames) * 100.0, 2)
+
+    return sorted(protocols, key=lambda x: (-x.packet_count, x.protocol.lower()))
