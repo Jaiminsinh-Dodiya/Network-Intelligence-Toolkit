@@ -1390,3 +1390,5 @@ def sort_conversations(convs: list[PcapConversationStat]) -> list[PcapConversati
             c.destination_port,
         ),
     )
+
+# Display filter validation logic
