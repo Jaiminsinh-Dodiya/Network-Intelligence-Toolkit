@@ -749,26 +749,825 @@ if ($pids) {
             logger.debug("psutil socket fallback failed: %s", err)
             return []
 
-# Network math adapter normalization integration
+    def get_tshark_path(self) -> str | None:
+        """Find and return the path to tshark.exe on Windows."""
+        import os
+        import shutil
+        found = shutil.which("tshark")
+        if found:
+            return found
+        standard_paths = [
+            r"C:\Program Files\Wireshark\tshark.exe",
+            r"C:\Program Files (x86)\Wireshark\tshark.exe",
+        ]
+        for p in standard_paths:
+            if os.path.isfile(p):
+                return p
+        return None
 
-# Windows Get-NetRoute route table collection
+    def ping_host(
+        self,
+        target: str,
+        count: int = 2,
+        timeout_seconds: float = 3.0,
+        interface_name: str | None = None,
+    ) -> ConnectivityTarget:
+        """Send ICMP echo requests using Windows ping utility."""
+        if not is_tool_available("ping"):
+            return ConnectivityTarget(
+                name="gateway",
+                target=target,
+                success=False,
+                status="ERROR",
+                details="Windows ping utility not found in PATH",
+            )
 
-# Windows route metric prioritization and default route discovery
+        timeout_ms = max(100, int(timeout_seconds * 1000))
+        target_arg = target
 
-# Windows DNS client server discovery via Get-DnsClientServerAddress
+        # Handle IPv6 link-local addresses requiring interface index scope
+        if "%" not in target_arg and target_arg.lower().startswith("fe80:"):
+            if interface_name:
+                try:
+                    ifaces = self.get_interfaces(target_iface=interface_name)
+                    if ifaces and ifaces[0].index is not None:
+                        target_arg = f"{target_arg}%{ifaces[0].index}"
+                except Exception as err:
+                    logger.debug("Failed resolving ifindex for %s: %s", interface_name, err)
 
-# Windows DoH detection via Get-DnsClientDohServerAddress
+        cmd = ["ping", "-n", str(count), "-w", str(timeout_ms), target_arg]
 
-# Windows DHCP lease discovery via CIM Win32_NetworkAdapterConfiguration
+        try:
+            proc_timeout = (count * timeout_seconds) + 2.0
+            res = run_command(cmd, timeout=proc_timeout, check=False)
+        except Exception as err:
+            logger.debug("Windows ping execution failed: %s", err)
+            return ConnectivityTarget(
+                name="gateway",
+                target=target,
+                success=False,
+                status="ERROR",
+                details=f"Ping execution error: {err}",
+            )
 
-# Windows netsh wlan show interfaces parser
+        return parse_windows_ping_output(res.stdout, target=target)
 
-# Windows ICMP ping via Test-Connection -Count 1
 
-# Windows Get-NetNeighbor collection
+def parse_windows_ping_output(stdout: str, target: str) -> ConnectivityTarget:
+    """Parse Windows ping command output into normalized ConnectivityTarget."""
+    if not stdout or not stdout.strip():
+        return ConnectivityTarget(
+            name="gateway",
+            target=target,
+            success=False,
+            status="ERROR",
+            details="Empty output from ping utility",
+        )
 
-# Windows neighbor MAC formatting and adapter filtering
+    pkt_match = re.search(
+        r"Sent\s*=\s*(\d+),\s*Received\s*=\s*(\d+),\s*Lost\s*=\s*(\d+)\s*\(([\d\.]+)%\s*loss\)",
+        stdout,
+        re.IGNORECASE,
+    )
 
-# Windows Get-NetTCPConnection and Get-NetUDPEndpoint parser
+    if not pkt_match:
+        lower_out = stdout.lower()
+        if "could not find host" in lower_out:
+            return ConnectivityTarget(
+                name="gateway",
+                target=target,
+                success=False,
+                status="FAILED",
+                details="Could not find host or resolve address",
+            )
+        if "general failure" in lower_out:
+            return ConnectivityTarget(
+                name="gateway",
+                target=target,
+                success=False,
+                status="FAILED",
+                details="Ping general failure",
+            )
+        return ConnectivityTarget(
+            name="gateway",
+            target=target,
+            success=False,
+            status="ERROR",
+            details="Malformed ping output",
+        )
 
-# Windows socket PID to process name mapping via Get-Process
+    sent = int(pkt_match.group(1))
+    received = int(pkt_match.group(2))
+    lost = int(pkt_match.group(3))
+    loss_pct = float(pkt_match.group(4))
+
+    rtt_match = re.search(
+        r"Minimum\s*=\s*(\d+)ms,\s*Maximum\s*=\s*(\d+)ms,\s*Average\s*=\s*(\d+)ms",
+        stdout,
+        re.IGNORECASE,
+    )
+
+    latency_ms: float | None = None
+    if rtt_match:
+        latency_ms = float(rtt_match.group(3))
+    elif received > 0:
+        reply_times = [
+            float(m) for m in re.findall(r"time[=<](\d+)ms", stdout, re.IGNORECASE)
+        ]
+        if reply_times:
+            latency_ms = round(sum(reply_times) / len(reply_times), 2)
+
+    if received > 0:
+        status = "SUCCESS"
+        details = f"{received}/{sent} packets received ({loss_pct:.0f}% loss)"
+        success = True
+    else:
+        lower_out = stdout.lower()
+        if "request timed out" in lower_out:
+            status = "TIMEOUT"
+            details = "Request timed out (100% packet loss)"
+        elif "destination host unreachable" in lower_out:
+            status = "FAILED"
+            details = "Destination host unreachable (100% packet loss)"
+        else:
+            status = "FAILED"
+            details = f"All packets lost ({loss_pct:.0f}% loss)"
+        success = False
+
+    return ConnectivityTarget(
+        name="gateway",
+        target=target,
+        success=success,
+        latency_ms=latency_ms,
+        packet_loss_pct=loss_pct,
+        details=details,
+        status=status,
+    )
+
+
+
+def _parse_wmi_date(val: Any) -> tuple[str | None, float | None]:
+    """Parse a WMI / PowerShell date into (iso_str, timestamp_seconds)."""
+    if not val:
+        return None, None
+    if isinstance(val, (int, float)):
+        ts = float(val) / 1000.0 if val > 1e11 else float(val)
+        try:
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return dt.isoformat(), ts
+        except Exception:
+            return None, None
+    val_str = str(val).strip()
+    match = re.search(r"/Date\((\d+)\)/", val_str)
+    if match:
+        try:
+            ts = int(match.group(1)) / 1000.0
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return dt.isoformat(), ts
+        except Exception:
+            pass
+    # WMI format: YYYYMMDDHHMMSS.mmmmmm+UUU
+    wmi_match = re.match(r"^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})", val_str)
+    if wmi_match:
+        try:
+            dt = datetime(
+                int(wmi_match.group(1)),
+                int(wmi_match.group(2)),
+                int(wmi_match.group(3)),
+                int(wmi_match.group(4)),
+                int(wmi_match.group(5)),
+                int(wmi_match.group(6)),
+                tzinfo=timezone.utc,
+            )
+            return dt.isoformat(), dt.timestamp()
+        except Exception:
+            pass
+    return val_str, None
+
+
+def parse_windows_dhcp(
+    cim_adapters: list[dict[str, Any]],
+    net_interfaces: list[dict[str, Any]] | None = None,
+    target_iface: str | None = None,
+) -> DhcpInfo:
+    """Parse Windows Win32_NetworkAdapterConfiguration and Get-NetIPInterface data into normalized DhcpInfo.
+
+    Handles CONFIGURED, PARTIAL, NOT_DHCP, UNAVAILABLE, and interface-specific resolution.
+    """
+    if not cim_adapters:
+        return DhcpInfo(
+            status="UNAVAILABLE",
+            interface=target_iface,
+            source="Win32_NetworkAdapterConfiguration",
+        )
+
+    # Build index <-> alias mappings from net_interfaces
+    alias_to_idx: dict[str, int] = {}
+    idx_to_alias: dict[int, str] = {}
+    if net_interfaces:
+        for item in net_interfaces:
+            idx = item.get("InterfaceIndex")
+            alias = item.get("InterfaceAlias")
+            if idx is not None and alias:
+                idx_to_alias[int(idx)] = str(alias)
+                alias_to_idx[str(alias).lower()] = int(idx)
+
+    # Find target adapter
+    selected_adapter: dict[str, Any] | None = None
+    target_idx: int | None = None
+    if target_iface:
+        target_idx = alias_to_idx.get(target_iface.lower())
+        for a in cim_adapters:
+            a_idx = a.get("InterfaceIndex")
+            if target_idx is not None and a_idx is not None and int(a_idx) == target_idx:
+                selected_adapter = a
+                break
+            desc = str(a.get("Description", "")).lower()
+            if target_iface.lower() in desc:
+                selected_adapter = a
+                break
+        if not selected_adapter:
+            return DhcpInfo(
+                status="UNAVAILABLE",
+                interface=target_iface,
+                source="Win32_NetworkAdapterConfiguration",
+            )
+    else:
+        # Pick best adapter: first with DefaultIPGateway, or first with DHCPEnabled, or first adapter
+        for a in cim_adapters:
+            gw = a.get("DefaultIPGateway")
+            if gw:
+                selected_adapter = a
+                break
+        if not selected_adapter:
+            for a in cim_adapters:
+                if a.get("DHCPEnabled"):
+                    selected_adapter = a
+                    break
+        if not selected_adapter:
+            selected_adapter = cim_adapters[0]
+
+    adapter = selected_adapter
+    idx = adapter.get("InterfaceIndex")
+    iface_name = idx_to_alias.get(int(idx)) if idx is not None and int(idx) in idx_to_alias else target_iface
+
+    dhcp_enabled = bool(adapter.get("DHCPEnabled", False))
+    raw_server = adapter.get("DHCPServer")
+    clean_server = None
+    if raw_server:
+        s = str(raw_server).strip()
+        if s not in ("255.255.255.255", "0.0.0.0", "None"):
+            clean_server = s
+
+    raw_ips = adapter.get("IPAddress")
+    ips = [raw_ips] if isinstance(raw_ips, str) else (raw_ips or [])
+    assigned_ip = ips[0] if ips else None
+
+    raw_subnets = adapter.get("IPSubnet")
+    subnets = [raw_subnets] if isinstance(raw_subnets, str) else (raw_subnets or [])
+    subnet_mask = subnets[0] if subnets else None
+
+    raw_gw = adapter.get("DefaultIPGateway")
+    gateways = [raw_gw] if isinstance(raw_gw, str) else (raw_gw or [])
+    router = gateways[0] if gateways else None
+
+    lease_start, ts_start = _parse_wmi_date(adapter.get("DHCPLeaseObtained"))
+    lease_expiry, ts_expiry = _parse_wmi_date(adapter.get("DHCPLeaseExpires"))
+    lease_duration = None
+    if ts_start is not None and ts_expiry is not None and ts_expiry > ts_start:
+        lease_duration = int(ts_expiry - ts_start)
+
+    if not dhcp_enabled:
+        return DhcpInfo(
+            enabled=False,
+            status="NOT_DHCP",
+            address=assigned_ip,
+            subnet_mask=subnet_mask,
+            router=router,
+            interface=iface_name,
+            source="Win32_NetworkAdapterConfiguration",
+        )
+
+    status = "CONFIGURED" if clean_server else "PARTIAL"
+    return DhcpInfo(
+        enabled=True,
+        status=status,
+        server=clean_server,
+        address=assigned_ip,
+        subnet_mask=subnet_mask,
+        router=router,
+        lease_start=lease_start,
+        lease_expiry=lease_expiry,
+        lease_duration=lease_duration,
+        interface=iface_name,
+        source="Win32_NetworkAdapterConfiguration",
+        raw_details={k: str(v) for k, v in adapter.items() if v is not None and not isinstance(v, (list, dict))},
+    )
+
+
+def parse_windows_wifi(
+    netsh_output: str,
+    net_adapters: list[dict[str, Any]] | None = None,
+    target_iface: str | None = None,
+) -> WifiInfo:
+    """Parse netsh wlan show interfaces output and Get-NetAdapter physical media types into WifiInfo.
+
+    Enforces:
+    - NOT_APPLICABLE for non-wireless interfaces (e.g. Ethernet).
+    - DISCONNECTED for disconnected wireless adapters.
+    - CONNECTED with canonical BSSID, frequency, channel, rates, signal, standard, and security mode.
+    - Zero credentials / passwords.
+    """
+    # 1. Check if target interface is explicitly non-wireless via Get-NetAdapter
+    if target_iface and net_adapters:
+        for na in net_adapters:
+            name = na.get("Name") or na.get("InterfaceAlias")
+            if name and str(name).lower() == target_iface.lower():
+                pm = str(na.get("PhysicalMediaType", "")).lower()
+                if "802.11" not in pm and "wireless" not in pm:
+                    return WifiInfo(
+                        interface=target_iface,
+                        is_wireless_interface=False,
+                        state="NOT_APPLICABLE",
+                        source="Get-NetAdapter",
+                    )
+
+    if not netsh_output or not netsh_output.strip():
+        return WifiInfo(
+            interface=target_iface,
+            state="UNAVAILABLE",
+            source="netsh",
+        )
+
+    lower_out = netsh_output.lower()
+    if "there is no wireless interface" in lower_out or ("hosted network status" in lower_out and "interface" not in lower_out):
+        return WifiInfo(
+            interface=target_iface,
+            is_wireless_interface=False,
+            state="NOT_APPLICABLE",
+            source="netsh",
+        )
+
+    if "wlansvc" in lower_out or "service is not running" in lower_out:
+        return WifiInfo(
+            interface=target_iface,
+            state="UNAVAILABLE",
+            source="netsh (wlansvc stopped)",
+        )
+
+    # Parse interface blocks
+    blocks: list[dict[str, str]] = []
+    current_block: dict[str, str] = {}
+    for line in netsh_output.splitlines():
+        line_s = line.strip()
+        if not line_s or line_s.startswith("There is") or line_s.startswith("There are"):
+            continue
+        if ":" in line_s:
+            k, v = line_s.split(":", 1)
+            k_clean = k.strip()
+            v_clean = v.strip()
+            if k_clean == "Name":
+                if current_block:
+                    blocks.append(current_block)
+                current_block = {"Name": v_clean}
+            else:
+                current_block[k_clean] = v_clean
+    if current_block:
+        blocks.append(current_block)
+
+    if not blocks:
+        return WifiInfo(
+            interface=target_iface,
+            is_wireless_interface=False,
+            state="NOT_APPLICABLE",
+            source="netsh",
+        )
+
+    # Select matching block
+    selected_block: dict[str, str] | None = None
+    if target_iface:
+        for b in blocks:
+            if b.get("Name", "").lower() == target_iface.lower():
+                selected_block = b
+                break
+        if not selected_block:
+            # Target was requested but netsh has no Wi-Fi interface by this name
+            return WifiInfo(
+                interface=target_iface,
+                is_wireless_interface=False,
+                state="NOT_APPLICABLE",
+                source="netsh",
+            )
+    else:
+        # Default: pick first connected, or first block
+        for b in blocks:
+            if b.get("State", "").lower() == "connected":
+                selected_block = b
+                break
+        if not selected_block:
+            selected_block = blocks[0]
+
+    block = selected_block
+    iface_name = block.get("Name", target_iface)
+    raw_state = block.get("State", "").lower()
+
+    if raw_state == "connected":
+        state = "CONNECTED"
+        connected = True
+    elif raw_state in ("disconnected", "authenticating", "associating", "associating..."):
+        state = "DISCONNECTED"
+        connected = False
+    else:
+        state = "UNAVAILABLE"
+        connected = False
+
+    if not connected:
+        return WifiInfo(
+            interface=iface_name,
+            is_wireless_interface=True,
+            state=state,
+            connected=False,
+            source="netsh wlan show interfaces",
+        )
+
+    ssid = block.get("SSID")
+    bssid = normalize_bssid(block.get("AP BSSID"))
+    band = block.get("Band")
+    channel = None
+    if "Channel" in block:
+        try:
+            channel = int(block["Channel"])
+        except ValueError:
+            pass
+
+    freq = None
+    if channel is not None and band:
+        freq = channel_to_frequency(channel, band)
+
+    signal_percent = None
+    if "Signal" in block:
+        sig_s = block["Signal"].replace("%", "").strip()
+        try:
+            signal_percent = int(sig_s)
+        except ValueError:
+            pass
+
+    signal_dbm = None
+    if "Rssi" in block:
+        rssi_s = block["Rssi"].replace("dBm", "").strip()
+        try:
+            signal_dbm = int(rssi_s)
+        except ValueError:
+            pass
+    signal_percent_estimated = False
+    signal_dbm_estimated = False
+
+    if signal_dbm is None and signal_percent is not None:
+        signal_dbm = signal_percent_to_dbm(signal_percent)
+        signal_dbm_estimated = True
+    elif signal_percent is None and signal_dbm is not None:
+        signal_percent = signal_dbm_to_percent(signal_dbm)
+        signal_percent_estimated = True
+
+    rx_rate = None
+    if "Receive rate (Mbps)" in block:
+        try:
+            rx_rate = float(block["Receive rate (Mbps)"])
+        except ValueError:
+            pass
+
+    tx_rate = None
+    if "Transmit rate (Mbps)" in block:
+        try:
+            tx_rate = float(block["Transmit rate (Mbps)"])
+        except ValueError:
+            pass
+
+    standard = normalize_wifi_standard(block.get("Radio type"))
+    sec_mode, raw_sec = normalize_wifi_security(block.get("Authentication"))
+
+    return WifiInfo(
+        interface=iface_name,
+        ssid=ssid,
+        bssid=bssid,
+        state=state,
+        is_wireless_interface=True,
+        connected=True,
+        frequency_mhz=freq,
+        channel=channel,
+        signal_percent=signal_percent,
+        signal_dbm=signal_dbm,
+        signal_percent_estimated=signal_percent_estimated,
+        signal_dbm_estimated=signal_dbm_estimated,
+        rx_rate_mbps=rx_rate,
+        tx_rate_mbps=tx_rate,
+        wifi_standard=standard,
+        security_mode=sec_mode,
+        raw_security=raw_sec,
+        source="netsh wlan show interfaces",
+    )
+
+
+# ==============================================================================
+# Windows Neighbor & Socket Parsers (Phase 7)
+# ==============================================================================
+
+WINDOWS_NEIGHBOR_STATE_MAP: dict[Any, str] = {
+    0: "UNREACHABLE",
+    1: "INCOMPLETE",
+    2: "PROBE",
+    3: "DELAY",
+    4: "STALE",
+    5: "REACHABLE",
+    6: "PERMANENT",
+    "unreachable": "UNREACHABLE",
+    "incomplete": "INCOMPLETE",
+    "probe": "PROBE",
+    "delay": "DELAY",
+    "stale": "STALE",
+    "reachable": "REACHABLE",
+    "permanent": "PERMANENT",
+}
+
+
+def normalize_windows_neighbor_state(raw_state: Any) -> str:
+    """Normalize Windows NetNeighbor State enum or string to canonical state."""
+    if raw_state is None:
+        return "UNKNOWN"
+    if isinstance(raw_state, int):
+        return WINDOWS_NEIGHBOR_STATE_MAP.get(raw_state, "UNKNOWN")
+    s = str(raw_state).strip().lower()
+    return WINDOWS_NEIGHBOR_STATE_MAP.get(s, str(raw_state).strip().upper() or "UNKNOWN")
+
+
+def parse_windows_neighbors(
+    json_output: str,
+    target_iface: str | None = None,
+    routing: RoutingInfo | None = None,
+    target_ifindex: int | None = None,
+) -> list[NeighborEntry]:
+    """Parse Get-NetNeighbor JSON output into normalized NeighborEntry list."""
+    if not json_output or not json_output.strip():
+        return []
+
+    try:
+        data = json.loads(json_output)
+    except Exception as err:
+        logger.debug("Failed to parse Windows neighbor JSON: %s", err)
+        return []
+
+    # Handle PowerShell ConvertTo-Json single-item dict vs array edge case
+    if isinstance(data, dict):
+        data = [data]
+    elif not isinstance(data, list):
+        return []
+
+    raw_neighbors: list[NeighborEntry] = []
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        ip_addr = item.get("IPAddress")
+        if not ip_addr:
+            continue
+        ip_addr_str = str(ip_addr).strip()
+
+        iface_alias = item.get("InterfaceAlias") or "Unknown"
+        iface_str = str(iface_alias).strip()
+        item_ifindex = item.get("InterfaceIndex")
+
+        # Interface filtering if target_iface was requested
+        if target_iface:
+            match = False
+            if iface_str.lower() == target_iface.strip().lower():
+                match = True
+            elif target_ifindex is not None and item_ifindex is not None:
+                try:
+                    if int(item_ifindex) == int(target_ifindex):
+                        match = True
+                except (ValueError, TypeError):
+                    pass
+            if not match:
+                continue
+
+        # MAC normalization
+        raw_mac = item.get("LinkLayerAddress")
+        norm_mac = normalize_bssid(str(raw_mac)) if raw_mac else None
+        if not norm_mac or norm_mac == "00:00:00:00:00:00":
+            # Missing or unreachable MAC retained as UNKNOWN
+            mac_address = "UNKNOWN"
+        else:
+            mac_address = norm_mac
+
+        # State normalization
+        state = normalize_windows_neighbor_state(item.get("State"))
+
+        # Router correlation (requires OS flag OR matching gateway IP + family + interface)
+        is_router = False
+        if item.get("IsRouter") is True:
+            is_router = True
+        elif is_gateway_match(ip_addr_str, iface_str, routing):
+            is_router = True
+
+        raw_neighbors.append(
+            NeighborEntry(
+                ip_address=ip_addr_str,
+                mac_address=mac_address,
+                interface=iface_str,
+                state=state,
+                is_router=is_router,
+            )
+        )
+
+    deduped = deduplicate_neighbors(raw_neighbors)
+    return sort_neighbors(deduped)
+
+
+WINDOWS_TCP_STATE_MAP: dict[Any, str] = {
+    0: "UNKNOWN",
+    1: "CLOSE",
+    2: "LISTEN",
+    3: "SYN_SENT",
+    4: "SYN_RECEIVED",
+    5: "ESTABLISHED",
+    6: "FIN_WAIT1",
+    7: "FIN_WAIT2",
+    8: "CLOSE_WAIT",
+    9: "CLOSING",
+    10: "LAST_ACK",
+    11: "TIME_WAIT",
+    12: "CLOSE",
+    100: "LISTEN",  # Bound socket
+    "unknown": "UNKNOWN",
+    "closed": "CLOSE",
+    "listen": "LISTEN",
+    "synsent": "SYN_SENT",
+    "synreceived": "SYN_RECEIVED",
+    "established": "ESTABLISHED",
+    "finwait1": "FIN_WAIT1",
+    "finwait2": "FIN_WAIT2",
+    "closewait": "CLOSE_WAIT",
+    "closing": "CLOSING",
+    "lastack": "LAST_ACK",
+    "timewait": "TIME_WAIT",
+    "deletetcb": "CLOSE",
+    "bound": "LISTEN",
+}
+
+
+def normalize_windows_tcp_state(raw_state: Any) -> str:
+    """Normalize Windows TCP State enum or string to canonical TCP state."""
+    if raw_state is None:
+        return "UNKNOWN"
+    if isinstance(raw_state, int):
+        return WINDOWS_TCP_STATE_MAP.get(raw_state, "UNKNOWN")
+    s = str(raw_state).strip().lower()
+    return WINDOWS_TCP_STATE_MAP.get(s, str(raw_state).strip().upper() or "UNKNOWN")
+
+
+def parse_windows_sockets(json_output: str) -> list[SocketEntry]:
+    """Parse combined PowerShell Get-NetTCPConnection and Get-NetUDPEndpoint JSON."""
+    if not json_output or not json_output.strip():
+        return []
+
+    try:
+        data = json.loads(json_output)
+    except Exception as err:
+        logger.debug("Failed to parse Windows sockets JSON: %s", err)
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    proc_map: dict[int, str] = {}
+    raw_proc = data.get("procMap", {})
+    if isinstance(raw_proc, dict):
+        for k, v in raw_proc.items():
+            try:
+                proc_map[int(k)] = str(v)
+            except (ValueError, TypeError):
+                pass
+
+    sockets: list[SocketEntry] = []
+
+    # 1. TCP Connections
+    tcp_list = data.get("tcp", [])
+    if isinstance(tcp_list, dict):
+        tcp_list = [tcp_list]
+    elif not isinstance(tcp_list, list):
+        tcp_list = []
+
+    for item in tcp_list:
+        if not isinstance(item, dict):
+            continue
+        laddr = item.get("LocalAddress")
+        lport = item.get("LocalPort")
+        if laddr is None or lport is None:
+            continue
+
+        try:
+            local_port = int(lport)
+        except (ValueError, TypeError):
+            continue
+
+        local_addr = normalize_ip_string(str(laddr))
+        state = normalize_windows_tcp_state(item.get("State"))
+
+        # Remote endpoint
+        raddr = item.get("RemoteAddress")
+        rport = item.get("RemotePort")
+        remote_addr = None
+        remote_port = None
+
+        if state == "LISTEN":
+            remote_addr = None
+            remote_port = None
+        elif raddr is not None and rport is not None:
+            try:
+                rp = int(rport)
+                ra = normalize_ip_string(str(raddr))
+                if ra in ("0.0.0.0", "::", "") and rp == 0:
+                    remote_addr = None
+                    remote_port = None
+                else:
+                    remote_addr = ra
+                    remote_port = rp
+            except (ValueError, TypeError):
+                remote_addr = None
+                remote_port = None
+
+        pid = None
+        owning_proc = item.get("OwningProcess")
+        if owning_proc is not None:
+            try:
+                p = int(owning_proc)
+                if p > 0:
+                    pid = p
+            except (ValueError, TypeError):
+                pid = None
+
+        pname = proc_map.get(pid) if pid else None
+
+        sockets.append(
+            SocketEntry(
+                protocol="TCP",
+                local_address=local_addr,
+                local_port=local_port,
+                remote_address=remote_addr,
+                remote_port=remote_port,
+                state=state,
+                pid=pid,
+                process_name=pname,
+            )
+        )
+
+    # 2. UDP Endpoints
+    udp_list = data.get("udp", [])
+    if isinstance(udp_list, dict):
+        udp_list = [udp_list]
+    elif not isinstance(udp_list, list):
+        udp_list = []
+
+    for item in udp_list:
+        if not isinstance(item, dict):
+            continue
+        laddr = item.get("LocalAddress")
+        lport = item.get("LocalPort")
+        if laddr is None or lport is None:
+            continue
+
+        try:
+            local_port = int(lport)
+        except (ValueError, TypeError):
+            continue
+
+        local_addr = normalize_ip_string(str(laddr))
+
+        pid = None
+        owning_proc = item.get("OwningProcess")
+        if owning_proc is not None:
+            try:
+                p = int(owning_proc)
+                if p > 0:
+                    pid = p
+            except (ValueError, TypeError):
+                pid = None
+
+        pname = proc_map.get(pid) if pid else None
+
+        sockets.append(
+            SocketEntry(
+                protocol="UDP",
+                local_address=local_addr,
+                local_port=local_port,
+                remote_address=None,
+                remote_port=None,
+                state="UNKNOWN",  # Do not fabricate LISTENING for UDP
+                pid=pid,
+                process_name=pname,
+            )
+        )
+
+    return sort_sockets(sockets)
+

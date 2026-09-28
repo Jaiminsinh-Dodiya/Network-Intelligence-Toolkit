@@ -137,9 +137,22 @@ class BasePlatformBackend(abc.ABC):
         )
 
     @abc.abstractmethod
+    def get_tshark_path(self) -> str | None:
+        """Find and return the path to the TShark executable on this platform, or None."""
+        pass
 
-# Interface-specific DHCP lease matching
+    def analyze_pcap(
+        self,
+        capture_path: Path,
+        display_filter: str | None = None,
+        config: dict | None = None,
+    ) -> PcapAnalysisInfo:
+        """Analyze offline PCAP/PCAPNG capture using TShark.
 
-# Public internet identity get_public_ip backend integration
+        Cross-platform orchestration using core.pcap.PcapAnalyzer.
+        """
+        from core.pcap import PcapAnalyzer
+        analyzer = PcapAnalyzer(backend=self, config=config)
+        return analyzer.analyze(capture_path=capture_path, display_filter=display_filter)
 
-# Connectivity diagnostics get_connectivity backend integration
+

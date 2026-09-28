@@ -750,3 +750,5 @@ if __name__ == "__main__":
 # Connectivity TIMEOUT badge formatting
 
 # Neighbors and Sockets console table rendering
+
+# PCAP analysis console tables rendering
