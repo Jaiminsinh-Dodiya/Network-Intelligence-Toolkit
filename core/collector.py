@@ -299,3 +299,5 @@ class CollectorCoordinator:
 # Connectivity diagnostic execution pipeline
 
 # Host telemetry collection for --neighbors and --sockets
+
+# PCAP analysis coordinator pipeline (Option I)
