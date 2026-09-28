@@ -878,3 +878,89 @@ def parse_tshark_endpoints(output: str, family: int) -> list[PcapEndpointStat]:
             )
 
     return endpoints
+
+
+def parse_tshark_conversations(output: str, proto: str) -> list[PcapConversationStat]:
+    """Parse output of tshark -q -z conv,tcp or conv,udp."""
+    conversations: list[PcapConversationStat] = []
+    lines = output.strip().splitlines()
+
+    in_table = False
+    for line in lines:
+        if "Conversations" in line or "Filter:" in line:
+            in_table = True
+            continue
+        if "===" in line:
+            continue
+        if not in_table or not line.strip():
+            continue
+
+        parts = line.split()
+        # Format example:
+        # 192.168.1.1:54321 <-> 93.184.216.34:443  10  5000  5  2500  5  2500  0.000000  0.1234
+        left = None
+        right = None
+        rem: list[str] = []
+
+        if "<->" in parts:
+            idx = parts.index("<->")
+            if idx > 0 and idx + 1 < len(parts):
+                left = parts[idx - 1]
+                right = parts[idx + 1]
+                rem = parts[idx + 2 :]
+        elif len(parts) >= 3 and ":" in parts[0] and ":" in parts[1]:
+            left = parts[0]
+            right = parts[1]
+            rem = parts[2 :]
+
+        if not left or not right:
+            continue
+
+        if ":" not in left or ":" not in right:
+            continue
+
+        src_ip, src_port_s = left.rsplit(":", 1)
+        dst_ip, dst_port_s = right.rsplit(":", 1)
+
+        try:
+            src_port = int(src_port_s)
+            dst_port = int(dst_port_s)
+        except (ValueError, TypeError):
+            continue
+
+        # Filter out 'bytes' keywords if present from TShark column formatting
+        clean_rem = [p for p in rem if p.lower() != "bytes"]
+
+        # Remainder tokens: frames, bytes, ...
+        try:
+            if len(clean_rem) >= 6:
+                frames = int(clean_rem[4])
+                byte_count = int(clean_rem[5])
+                rel_start = float(clean_rem[6]) if len(clean_rem) > 6 else None
+                duration = float(clean_rem[7]) if len(clean_rem) > 7 else None
+            else:
+                frames = int(clean_rem[0]) if len(clean_rem) > 0 else 0
+                byte_count = int(clean_rem[1]) if len(clean_rem) > 1 else 0
+                rel_start = None
+                duration = None
+        except (ValueError, TypeError):
+            frames = 0
+            byte_count = 0
+            rel_start = None
+            duration = None
+
+        conversations.append(
+            PcapConversationStat(
+                protocol=proto,
+                source=normalize_ip_string(src_ip),
+                source_port=src_port,
+                destination=normalize_ip_string(dst_ip),
+                destination_port=dst_port,
+                frames=frames,
+                bytes=byte_count,
+                relative_start=rel_start,
+                duration=duration,
+            )
+        )
+
+    return conversations
