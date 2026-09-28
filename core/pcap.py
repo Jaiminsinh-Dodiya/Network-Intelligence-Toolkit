@@ -1110,3 +1110,66 @@ def parse_tshark_http_output(tsv_output: str) -> PcapHttpSummary:
         top_hosts=top_hosts,
         requests=requests,
     )
+
+
+def parse_tshark_tls_output(tsv_output: str) -> PcapTlsSummary:
+    """Parse fields from TShark TLS metadata extraction (handshakes, SNI, versions)."""
+    session_count = 0
+    versions: Counter[str] = Counter()
+    snis: set[str] = set()
+    ciphers: Counter[str] = Counter()
+    sessions: list[dict[str, Any]] = []
+
+    version_names = {
+        "0x0301": "TLS 1.0",
+        "0x0302": "TLS 1.1",
+        "0x0303": "TLS 1.2",
+        "0x0304": "TLS 1.3",
+        "0x0300": "SSL 3.0",
+    }
+
+    for line in tsv_output.splitlines():
+        parts = line.split("\t")
+        # Fields: frame.number, ip.src, ip.dst, tls.record.version, tls.handshake.type, tls.handshake.extensions_server_name, tls.handshake.ciphersuite
+        if len(parts) < 4:
+            continue
+
+        frame_num = parts[0]
+        src = parts[1]
+        dst = parts[2]
+        ver_raw = parts[3].strip() if len(parts) > 3 else ""
+        hs_type = parts[4].strip() if len(parts) > 4 else ""
+        sni = parts[5].strip() if len(parts) > 5 else ""
+        cipher_raw = parts[6].strip() if len(parts) > 6 else ""
+
+        if hs_type == "1":  # Client Hello
+            session_count += 1
+
+        if ver_raw:
+            ver_clean = version_names.get(ver_raw.lower(), ver_raw)
+            versions[ver_clean] += 1
+
+        if sni:
+            snis.add(sni)
+
+        if cipher_raw:
+            ciphers[cipher_raw] += 1
+
+        if len(sessions) < 100 and (sni or ver_raw):
+            sessions.append({
+                "frame": frame_num,
+                "source": src,
+                "destination": dst,
+                "version": version_names.get(ver_raw.lower(), ver_raw) if ver_raw else None,
+                "handshake_type": hs_type or None,
+                "sni": sni or None,
+                "cipher_suite": cipher_raw or None,
+            })
+
+    return PcapTlsSummary(
+        session_count=session_count,
+        versions=dict(sorted(versions.items())),
+        sni_list=sorted(snis),
+        cipher_suites=dict(sorted(ciphers.items())),
+        sessions=sessions,
+    )
