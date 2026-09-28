@@ -831,3 +831,50 @@ def parse_tshark_protocol_hierarchy(output: str) -> list[PcapProtocolStat]:
             p.percentage = round((p.packet_count / top_frames) * 100.0, 2)
 
     return sorted(protocols, key=lambda x: (-x.packet_count, x.protocol.lower()))
+
+
+def parse_tshark_endpoints(output: str, family: int) -> list[PcapEndpointStat]:
+    """Parse output of tshark -q -z endpoints,ip or endpoints,ipv6."""
+    endpoints: list[PcapEndpointStat] = []
+    lines = output.strip().splitlines()
+
+    in_table = False
+    for line in lines:
+        if "IPv4 Endpoints" in line or "IPv6 Endpoints" in line or "Filter:" in line:
+            in_table = True
+            continue
+        if "===" in line:
+            continue
+        if not in_table or not line.strip():
+            continue
+
+        parts = [p for p in line.split() if p.lower() != "bytes"]
+        # Columns typically: Address, Packets, Bytes, Tx Packets, Tx Bytes, Rx Packets, Rx Bytes
+        if len(parts) >= 3:
+            addr = parts[0].strip()
+            if addr.lower() in ("address", "filter:", "ipv4", "ipv6"):
+                continue
+            try:
+                pkts = int(parts[1])
+                byte_count = int(parts[2])
+                tx_pkts = int(parts[3]) if len(parts) > 3 else 0
+                tx_bytes = int(parts[4]) if len(parts) > 4 else 0
+                rx_pkts = int(parts[5]) if len(parts) > 5 else 0
+                rx_bytes = int(parts[6]) if len(parts) > 6 else 0
+            except (ValueError, TypeError):
+                continue
+
+            endpoints.append(
+                PcapEndpointStat(
+                    address=normalize_ip_string(addr),
+                    address_family=family,
+                    packet_count=pkts,
+                    byte_count=byte_count,
+                    sent_packets=tx_pkts,
+                    sent_bytes=tx_bytes,
+                    received_packets=rx_pkts,
+                    received_bytes=rx_bytes,
+                )
+            )
+
+    return endpoints
