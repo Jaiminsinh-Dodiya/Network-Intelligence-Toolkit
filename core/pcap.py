@@ -1173,3 +1173,58 @@ def parse_tshark_tls_output(tsv_output: str) -> PcapTlsSummary:
         cipher_suites=dict(sorted(ciphers.items())),
         sessions=sessions,
     )
+
+
+def parse_tshark_tcp_output(tsv_output: str) -> PcapTcpSummary:
+    """Parse fields from TShark TCP metadata extraction."""
+    syn_count = 0
+    syn_ack_count = 0
+    ack_count = 0
+    rst_count = 0
+    fin_count = 0
+    retrans_count = 0
+    dup_ack_count = 0
+    zero_win_count = 0
+
+    for line in tsv_output.splitlines():
+        parts = line.split("\t")
+        # Fields: frame.number, tcp.flags.syn, tcp.flags.ack, tcp.flags.reset, tcp.flags.fin, tcp.analysis.retransmission, tcp.analysis.duplicate_ack, tcp.analysis.zero_window
+        if len(parts) < 2:
+            continue
+
+        is_syn = parts[1].strip() in ("1", "True") if len(parts) > 1 else False
+        is_ack = parts[2].strip() in ("1", "True") if len(parts) > 2 else False
+        is_rst = parts[3].strip() in ("1", "True") if len(parts) > 3 else False
+        is_fin = parts[4].strip() in ("1", "True") if len(parts) > 4 else False
+        is_retrans = bool(parts[5].strip()) if len(parts) > 5 else False
+        is_dup_ack = bool(parts[6].strip()) if len(parts) > 6 else False
+        is_zero_win = bool(parts[7].strip()) if len(parts) > 7 else False
+
+        if is_syn and is_ack:
+            syn_ack_count += 1
+        elif is_syn:
+            syn_count += 1
+
+        if is_ack:
+            ack_count += 1
+        if is_rst:
+            rst_count += 1
+        if is_fin:
+            fin_count += 1
+        if is_retrans:
+            retrans_count += 1
+        if is_dup_ack:
+            dup_ack_count += 1
+        if is_zero_win:
+            zero_win_count += 1
+
+    return PcapTcpSummary(
+        syn_count=syn_count,
+        syn_ack_count=syn_ack_count,
+        ack_count=ack_count,
+        rst_count=rst_count,
+        fin_count=fin_count,
+        retransmission_count=retrans_count,
+        duplicate_ack_count=dup_ack_count,
+        zero_window_count=zero_win_count,
+    )
