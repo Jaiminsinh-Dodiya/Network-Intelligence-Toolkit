@@ -174,3 +174,197 @@ class ObservationEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Rule 1: Gateway / Neighbor Correlation
     # ──────────────────────────────────────────────────────────────────────────
+    def observe_default_gateway_consistency(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Correlate default gateway with neighbor table entries.
+
+        Scope-aware: A matching/missing neighbor conclusion requires actual neighbor collection.
+        If neighbors were not in collected_sections, returns [].
+        """
+        obs: list[Observation] = []
+
+        # Scope check: Must have collected both routing and neighbors
+        if collected_sections is not None:
+            if "neighbors" not in collected_sections or "routing" not in collected_sections:
+                return obs
+
+        if not report.routing or not report.routing.default_ipv4:
+            return obs
+
+        gw = report.routing.default_ipv4.gateway
+        if not gw or gw == "0.0.0.0":
+            return obs
+
+        gw_iface = report.routing.default_ipv4.interface or ""
+
+        # Check if neighbor collection occurred
+        has_neighbor_cap = False
+        if report.capabilities:
+            cap = report.capabilities.get("neighbor_table")
+            if cap:
+                has_neighbor_cap = getattr(cap, "status", "") in ("AVAILABLE", "PARTIAL") or (
+                    isinstance(cap, dict) and cap.get("status") in ("AVAILABLE", "PARTIAL")
+                )
+
+        # If neighbor cache has matching entry
+        matching_neighbor = None
+        if report.neighbors:
+            for n in report.neighbors:
+                if n.ip_address == gw:
+                    matching_neighbor = n
+                    break
+
+        if matching_neighbor:
+            obs.append(
+                Observation(
+                    id="NETWORK.GATEWAY.NEIGHBOR_MATCH",
+                    category="NETWORK",
+                    severity="INFO",
+                    confidence="HIGH",
+                    title="Default IPv4 gateway has matching neighbor cache entry",
+                    summary=f"Default gateway {gw} is present in the neighbor cache on interface {matching_neighbor.interface} with state {matching_neighbor.state}.",
+                    details=f"Default gateway {gw} was resolved in the local ARP/neighbor cache on interface {matching_neighbor.interface} with MAC {matching_neighbor.mac_address} and state {matching_neighbor.state}.",
+                    source_sections=["neighbors", "routing"],
+                    related_entities=[gw, matching_neighbor.interface] if matching_neighbor.interface else [gw],
+                    evidence=[
+                        ObservationEvidence(
+                            source="routing",
+                            field="default_ipv4.gateway",
+                            value=gw,
+                            description=f"Default gateway {gw} on interface {gw_iface}",
+                        ),
+                        ObservationEvidence(
+                            source="neighbors",
+                            field="ip_address",
+                            value=matching_neighbor.ip_address,
+                            description=f"Neighbor MAC: {matching_neighbor.mac_address}, state: {matching_neighbor.state}",
+                        ),
+                    ],
+                    status="OBSERVED",
+                )
+            )
+        elif report.neighbors and has_neighbor_cap:
+            # Neighbor collection succeeded and has entries, but no entry for gateway
+            obs.append(
+                Observation(
+                    id="NETWORK.GATEWAY.NEIGHBOR_MISSING",
+                    category="NETWORK",
+                    severity="NOTICE",
+                    confidence="MEDIUM",
+                    title="Default IPv4 gateway has no matching neighbor cache entry",
+                    summary=f"Default gateway {gw} exists in routing information but no matching neighbor-cache entry was observed.",
+                    details=f"The host has default gateway {gw} configured on interface '{gw_iface}', but no matching entry was found in the local ARP/neighbor cache ({len(report.neighbors)} entries observed). This may be due to cache expiration, interface inactivity, or collection timing.",
+                    source_sections=["neighbors", "routing"],
+                    related_entities=[gw, gw_iface] if gw_iface else [gw],
+                    evidence=[
+                        ObservationEvidence(
+                            source="routing",
+                            field="default_ipv4.gateway",
+                            value=gw,
+                            description=f"Configured default gateway {gw}",
+                        ),
+                        ObservationEvidence(
+                            source="neighbors",
+                            field="entries_count",
+                            value=len(report.neighbors),
+                            description=f"Neighbor cache contains {len(report.neighbors)} entries, none matching {gw}",
+                        ),
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 2: Routing Consistency
+    # ──────────────────────────────────────────────────────────────────────────
+    def observe_routing_state(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect routing state for default routes and consistency."""
+        obs: list[Observation] = []
+
+        if collected_sections is not None and "routing" not in collected_sections:
+            return obs
+
+        if not report.routing or getattr(report.routing, "status", "") in ("UNAVAILABLE", "ERROR"):
+            return obs
+
+        routing = report.routing
+
+        # Check for NO default gateway
+        has_v4_default = routing.default_ipv4 is not None and bool(routing.default_ipv4.gateway)
+        has_v6_default = routing.default_ipv6 is not None and bool(routing.default_ipv6.gateway)
+
+        if not has_v4_default and not has_v6_default:
+            obs.append(
+                Observation(
+                    id="NETWORK.ROUTING.NO_DEFAULT_GATEWAY",
+                    category="NETWORK",
+                    severity="NOTICE",
+                    confidence="HIGH",
+                    title="No default gateway route configured",
+                    summary="No active default gateway route (IPv4 or IPv6) was observed in the routing table.",
+                    details="The host routing table does not contain an active default route (0.0.0.0/0 or ::/0). Direct connectivity to non-local subnets or the Internet may be unavailable.",
+                    source_sections=["routing"],
+                    related_entities=[],
+                    evidence=[
+                        ObservationEvidence(
+                            source="routing",
+                            field="default_ipv4",
+                            value=None,
+                            description="No default IPv4 route present",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        # Check for multiple active default routes
+        if routing.routes:
+            active_v4_defaults = [
+                r
+                for r in routing.routes
+                if r.ip_version == 4
+                and r.destination in ("0.0.0.0", "0.0.0.0/0", "default")
+                and r.gateway
+                and r.gateway != "0.0.0.0"
+            ]
+            unique_defaults = {(r.gateway, r.interface) for r in active_v4_defaults}
+            if len(unique_defaults) > 1:
+                gw_list = [f"{gw} ({iface})" for gw, iface in sorted(unique_defaults)]
+                entities = [gw for gw, _ in sorted(unique_defaults)]
+                obs.append(
+                    Observation(
+                        id="NETWORK.ROUTING.MULTIPLE_DEFAULTS",
+                        category="NETWORK",
+                        severity="NOTICE",
+                        confidence="HIGH",
+                        title=f"Multiple active default routes observed ({len(unique_defaults)})",
+                        summary=f"Multiple ({len(unique_defaults)}) active default gateway routes were observed in routing configuration: {', '.join(gw_list)}.",
+                        details="Multiple active default routes are configured across one or more interfaces. The operating system selects egress routes based on interface metrics and route priorities.",
+                        source_sections=["routing"],
+                        related_entities=entities,
+                        evidence=[
+                            ObservationEvidence(
+                                source="routing",
+                                field="default_routes_count",
+                                value=len(unique_defaults),
+                                description=f"Gateways: {', '.join(gw_list)}",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 3: DNS Consistency
+    # ──────────────────────────────────────────────────────────────────────────
