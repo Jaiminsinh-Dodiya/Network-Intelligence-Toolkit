@@ -1392,7 +1392,33 @@ class Observation:
 
 
 @dataclass
+class DiffItem:
+    """Individual detected change between snapshots."""
+    category: str
+    change_type: str  # ADDED, REMOVED, MODIFIED, UNCHANGED
+    item_name: str
+    old_value: str | None = None
+    new_value: str | None = None
+    details: str | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class DiffReport:
+    """Comparison report between baseline snapshot and current state."""
+    baseline_file: str
+    baseline_timestamp: str
+    current_timestamp: str
+    changes: list[DiffItem] = field(default_factory=list)
+    summary: dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
     system: SystemInfo
