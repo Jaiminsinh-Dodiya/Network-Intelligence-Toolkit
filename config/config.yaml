@@ -65,11 +65,3 @@ pcap:
   packet_sample_limit: 100
   timeline_interval_seconds: 1.0
 
-
-# Public IP provider timeouts and rate limit thresholds
-
-# Connectivity diagnostic probe targets and timeout thresholds
-
-# Connectivity timeout boundary validation
-
-# PCAP bounded analysis thresholds

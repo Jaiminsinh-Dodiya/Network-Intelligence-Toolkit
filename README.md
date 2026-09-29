@@ -494,9 +494,3 @@ python main.py --pcap capture.pcapng --json -o report.json
 python -m pytest tests -v
 ```
 
-
-<!-- Phase 5.1 Public Identity Hardening Documentation -->
-
-<!-- Phase 6.1 Connectivity Hardening Documentation -->
-
-<!-- Phase 8.1 TShark Hardening Documentation -->

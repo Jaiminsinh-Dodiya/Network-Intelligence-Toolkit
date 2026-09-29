@@ -1390,13 +1390,3 @@ def sort_conversations(convs: list[PcapConversationStat]) -> list[PcapConversati
             c.destination_port,
         ),
     )
-
-# Display filter validation logic
-
-# Incremental 64KB stream reader with max_output_bytes boundary
-
-# Enforce -c max_packets at invocation level
-
-# Enforce http.request.uri.path privacy boundary
-
-# Subprocess termination and reader thread drain safety
