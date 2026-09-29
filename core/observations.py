@@ -1362,9 +1362,3 @@ class ObservationEngine:
             )
 
         return sorted(observations, key=_sort_key)
-
-# Scope context data structure
-
-# Scope guards for observe_neighbor_state and observe_socket_state
-
-# Scope guards for gateway consistency and partial capability reporting
