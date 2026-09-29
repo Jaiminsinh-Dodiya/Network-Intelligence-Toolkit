@@ -368,3 +368,187 @@ class ObservationEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Rule 3: DNS Consistency
     # ──────────────────────────────────────────────────────────────────────────
+    def observe_dns_consistency(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect DNS configuration for stub resolvers and upstream availability."""
+        obs: list[Observation] = []
+
+        if collected_sections is not None and "dns" not in collected_sections:
+            return obs
+
+        if not report.dns or report.dns.status in ("UNAVAILABLE", "ERROR"):
+            return obs
+
+        dns = report.dns
+
+        # 1. Local stub resolver
+        stub_servers = []
+        if dns.servers:
+            for s in dns.servers:
+                addr = s.address if hasattr(s, "address") else str(s)
+                is_stub = getattr(s, "is_stub", False) or addr in STUB_RESOLVER_IPS
+                if is_stub or addr.startswith("127.") or addr == "::1":
+                    stub_servers.append(addr)
+
+        if stub_servers:
+            unique_stubs = sorted(set(stub_servers))
+            obs.append(
+                Observation(
+                    id="NETWORK.DNS.STUB_RESOLVER",
+                    category="NETWORK",
+                    severity="INFO",
+                    confidence="HIGH",
+                    title="Local DNS stub resolver configured",
+                    summary=f"DNS queries are directed to local stub resolver ({', '.join(unique_stubs)}).",
+                    details=f"The host is configured with a system-local stub resolver ({', '.join(unique_stubs)}), typically managed by systemd-resolved or a local caching daemon. Queries are resolved or cached locally before upstream forwarding.",
+                    source_sections=["dns"],
+                    related_entities=unique_stubs,
+                    evidence=[
+                        ObservationEvidence(
+                            source="dns",
+                            field="servers",
+                            value=unique_stubs,
+                            description=f"Configured stub resolver(s): {', '.join(unique_stubs)}",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        # 2. No usable upstream DNS servers
+        if not dns.servers and dns.status in ("CONFIGURED", "EMPTY"):
+            obs.append(
+                Observation(
+                    id="NETWORK.DNS.NO_UPSTREAM",
+                    category="NETWORK",
+                    severity="NOTICE",
+                    confidence="HIGH",
+                    title="No upstream DNS servers configured",
+                    summary="No usable DNS nameservers were found in host DNS configuration.",
+                    details="The operating system DNS client does not have any configured upstream resolver addresses. Name resolution will fail unless handled by local static hosts files.",
+                    source_sections=["dns"],
+                    related_entities=[],
+                    evidence=[
+                        ObservationEvidence(
+                            source="dns",
+                            field="servers",
+                            value=[],
+                            description="DNS resolver list is empty",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 4: IPv6 State
+    # ──────────────────────────────────────────────────────────────────────────
+    def observe_ipv6_state(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect IPv6 address configuration and Internet connectivity status."""
+        obs: list[Observation] = []
+
+        if collected_sections is not None and "interfaces" not in collected_sections:
+            return obs
+
+        # Find global IPv6 addresses across interfaces
+        global_v6_addrs: list[tuple[str, str]] = []
+        ifaces = report.all_interfaces or ([report.selected_interface] if report.selected_interface else [])
+        for iface in ifaces:
+            if not iface:
+                continue
+            for v6 in iface.ipv6:
+                clean_ip = v6.split("/")[0].split("%")[0].strip()
+                try:
+                    ip_obj = ipaddress.ip_address(clean_ip)
+                    if ip_obj.version == 6 and not ip_obj.is_link_local and not ip_obj.is_loopback:
+                        global_v6_addrs.append((clean_ip, iface.name))
+                except ValueError:
+                    pass
+
+        # Only evaluate unverified IPv6 Internet connectivity if connectivity probe ran
+        if collected_sections is None or "connectivity" in collected_sections:
+            v6_conn_status = None
+            if report.connectivity and report.connectivity.ipv6:
+                v6_conn_status = report.connectivity.ipv6.status
+
+            if global_v6_addrs:
+                first_addr, first_iface = global_v6_addrs[0]
+                if v6_conn_status and v6_conn_status != "SUCCESS":
+                    obs.append(
+                        Observation(
+                            id="NETWORK.IPV6.CONFIGURED_NO_CONNECTIVITY",
+                            category="NETWORK",
+                            severity="INFO",
+                            confidence="HIGH",
+                            title="Global IPv6 configured without verified Internet connectivity",
+                            summary=f"Interface '{first_iface}' has global IPv6 address {first_addr} configured, but IPv6 Internet connectivity was not observed.",
+                            details=f"A routable IPv6 address ({first_addr}) is assigned to interface '{first_iface}', but active IPv6 connectivity probe returned '{v6_conn_status}'. External IPv6 routing or upstream connectivity may be inactive.",
+                            source_sections=["interfaces", "connectivity"],
+                            related_entities=[first_addr, first_iface],
+                            evidence=[
+                                ObservationEvidence(
+                                    source="interfaces",
+                                    field="ipv6",
+                                    value=first_addr,
+                                    description=f"Global IPv6 address on {first_iface}",
+                                ),
+                                ObservationEvidence(
+                                    source="connectivity",
+                                    field="ipv6.status",
+                                    value=v6_conn_status,
+                                    description=f"IPv6 connectivity test status: {v6_conn_status}",
+                                ),
+                            ],
+                            status="OBSERVED",
+                        )
+                    )
+
+        # Check for dual-stack public identity (only if public_ip in scope)
+        if collected_sections is None or "public_ip" in collected_sections:
+            if report.public_ip and report.public_ip.status in ("SUCCESS", "AVAILABLE"):
+                v4_pub = report.public_ip.ip
+                v6_pub = getattr(report.public_ip, "ipv6", None)
+                if v4_pub and v6_pub:
+                    obs.append(
+                        Observation(
+                            id="NETWORK.PUBLIC_IDENTITY.DUAL_STACK",
+                            category="PUBLIC_IDENTITY",
+                            severity="INFO",
+                            confidence="HIGH",
+                            title="Dual-stack public Internet connectivity observed",
+                            summary=f"Both public IPv4 ({v4_pub}) and IPv6 ({v6_pub}) addresses were observed.",
+                            details=f"The host possesses active public egress connectivity across both IPv4 ({v4_pub}) and IPv6 ({v6_pub}) protocols.",
+                            source_sections=["public_ip"],
+                            related_entities=[v4_pub, v6_pub],
+                            evidence=[
+                                ObservationEvidence(
+                                    source="public_ip",
+                                    field="ip",
+                                    value=v4_pub,
+                                    description=f"Public IPv4 address: {v4_pub}",
+                                ),
+                                ObservationEvidence(
+                                    source="public_ip",
+                                    field="ipv6",
+                                    value=v6_pub,
+                                    description=f"Public IPv6 address: {v6_pub}",
+                                ),
+                            ],
+                            status="OBSERVED",
+                        )
+                    )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 5: Public Identity Observations
+    # ──────────────────────────────────────────────────────────────────────────
