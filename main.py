@@ -740,15 +740,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-# DHCP and Wi-Fi console table rendering
-
-# Public Internet Identity & ASN terminal rendering
-
-# Connectivity diagnostic tables console rendering
-
-# Connectivity TIMEOUT badge formatting
-
-# Neighbors and Sockets console table rendering
-
-# PCAP analysis console tables rendering

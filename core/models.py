@@ -1220,6 +1220,205 @@ class PcapAnalysisInfo:
             res["tcp_summary"] = _ser(self.tcp_summary)
         return res
 
+
+VALID_OBSERVATION_CATEGORIES = {
+    "NETWORK",
+    "HOST",
+    "CONNECTIVITY",
+    "PUBLIC_IDENTITY",
+    "PCAP",
+    "DATA_QUALITY",
+}
+
+VALID_OBSERVATION_SEVERITIES = {
+    "INFO",
+    "NOTICE",
+    "WARNING",
+}
+
+VALID_OBSERVATION_CONFIDENCES = {
+    "HIGH",
+    "MEDIUM",
+    "LOW",
+}
+
+VALID_OBSERVATION_STATUSES = {
+    "OBSERVED",
+    "INFORMATIONAL",
+    "UNAVAILABLE",
+    "SUPPRESSED",
+}
+
+
+@dataclass
+class ObservationEvidence:
+    """Individual bounded supporting evidence fact for an observation."""
+    source: str
+    field: str
+    value: Any
+    description: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "field": self.field,
+            "value": self.value,
+            "description": self.description,
+        }
+
+
+@dataclass
+class Observation:
+    """Objective, evidence-backed security and network configuration observation."""
+    id: str = ""
+    category: str = "NETWORK"
+    severity: str = "INFO"
+    title: str = ""
+    summary: str = ""
+    details: str = ""
+    confidence: str = "HIGH"
+    evidence: list[ObservationEvidence] = field(default_factory=list)
+    source_sections: list[str] = field(default_factory=list)
+    related_entities: list[str] = field(default_factory=list)
+    status: str = "OBSERVED"
+
+    # Backward compatibility / legacy fields
+    interpretation: str | None = None
+
+    def __post_init__(self) -> None:
+        # Normalize/validate category
+        cat_upper = self.category.upper()
+        if cat_upper in VALID_OBSERVATION_CATEGORIES:
+            self.category = cat_upper
+        elif cat_upper in ("PROTOCOLS", "TRAFFIC"):
+            self.category = "PCAP"
+        elif cat_upper in ("GENERAL", "ROUTING", "DNS", "IPV6"):
+            self.category = "NETWORK"
+        else:
+            raise ValueError(
+                f"Invalid observation category '{self.category}'. "
+                f"Must be one of {sorted(VALID_OBSERVATION_CATEGORIES)}"
+            )
+
+        # Normalize/validate severity
+        sev_upper = self.severity.upper()
+        if sev_upper in VALID_OBSERVATION_SEVERITIES:
+            self.severity = sev_upper
+        elif sev_upper in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
+            # Preserved for backward-compatibility with Phase 1 legacy tests
+            self.severity = sev_upper
+        else:
+            raise ValueError(
+                f"Invalid observation severity '{self.severity}'. "
+                f"Must be one of {sorted(VALID_OBSERVATION_SEVERITIES)}"
+            )
+
+        # Normalize/validate confidence
+        conf_upper = self.confidence.upper()
+        if conf_upper in VALID_OBSERVATION_CONFIDENCES:
+            self.confidence = conf_upper
+        else:
+            raise ValueError(
+                f"Invalid observation confidence '{self.confidence}'. "
+                f"Must be one of {sorted(VALID_OBSERVATION_CONFIDENCES)}"
+            )
+
+        # Normalize/validate status
+        stat_upper = self.status.upper()
+        if stat_upper in VALID_OBSERVATION_STATUSES:
+            self.status = stat_upper
+        else:
+            raise ValueError(
+                f"Invalid observation status '{self.status}'. "
+                f"Must be one of {sorted(VALID_OBSERVATION_STATUSES)}"
+            )
+
+        # Handle legacy or non-list evidence
+        if isinstance(self.evidence, str):
+            self.evidence = [
+                ObservationEvidence(
+                    source=self.source_sections[0] if self.source_sections else "general",
+                    field="evidence",
+                    value=self.evidence,
+                    description=self.evidence,
+                )
+            ]
+        elif isinstance(self.evidence, list):
+            norm_ev = []
+            for item in self.evidence:
+                if isinstance(item, ObservationEvidence):
+                    norm_ev.append(item)
+                elif isinstance(item, dict):
+                    norm_ev.append(ObservationEvidence(**item))
+                elif isinstance(item, str):
+                    norm_ev.append(
+                        ObservationEvidence(
+                            source="evidence",
+                            field="text",
+                            value=item,
+                            description=item,
+                        )
+                    )
+            self.evidence = norm_ev
+
+        # Handle legacy interpretation field
+        if self.interpretation and not self.details:
+            self.details = self.interpretation
+        if not self.summary and self.details:
+            self.summary = self.details
+        if not self.details and self.summary:
+            self.details = self.summary
+        if not self.id:
+            slug = "".join(c if c.isalnum() else "_" for c in self.title.upper()).strip("_")
+            self.id = f"{self.category}.{slug}" if slug else f"{self.category}.OBSERVATION"
+
+    def to_dict(self) -> dict[str, Any]:
+        ev_dicts = [e.to_dict() if hasattr(e, "to_dict") else e for e in self.evidence]
+        # Sort evidence deterministically by source, field
+        ev_dicts.sort(key=lambda x: (x.get("source", ""), x.get("field", "")))
+        return {
+            "id": self.id,
+            "category": self.category,
+            "severity": self.severity,
+            "title": self.title,
+            "summary": self.summary,
+            "details": self.details,
+            "confidence": self.confidence,
+            "evidence": ev_dicts,
+            "source_sections": sorted(self.source_sections),
+            "related_entities": sorted(self.related_entities),
+            "status": self.status,
+        }
+
+
+@dataclass
+class DiffItem:
+    """Individual detected change between snapshots."""
+    category: str
+    change_type: str  # ADDED, REMOVED, MODIFIED, UNCHANGED
+    item_name: str
+    old_value: str | None = None
+    new_value: str | None = None
+    details: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class DiffReport:
+    """Comparison report between baseline snapshot and current state."""
+    baseline_file: str
+    baseline_timestamp: str
+    current_timestamp: str
+    changes: list[DiffItem] = field(default_factory=list)
+    summary: dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
 class NetworkIntelligenceReport:
     """Comprehensive normalized network intelligence report."""
     system: SystemInfo
