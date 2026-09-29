@@ -1318,3 +1318,47 @@ class ObservationEngine:
             filtered.append(o)
 
         return filtered
+
+    def _deduplicate(self, observations: list[Observation]) -> list[Observation]:
+        """Deduplicate observations with identical (id, related_entities)."""
+        seen: dict[tuple[str, tuple[str, ...]], Observation] = {}
+        severity_rank = {"WARNING": 1, "NOTICE": 2, "INFO": 3}
+
+        for o in observations:
+            key = (o.id, tuple(sorted(o.related_entities)))
+            if key not in seen:
+                seen[key] = o
+            else:
+                existing = seen[key]
+                # Keep the one with higher severity
+                if severity_rank.get(o.severity, 99) < severity_rank.get(existing.severity, 99):
+                    seen[key] = o
+
+        return list(seen.values())
+
+    def _sort_observations(self, observations: list[Observation]) -> list[Observation]:
+        """Sort observations in a deterministic canonical order."""
+        category_order = {
+            "NETWORK": 1,
+            "HOST": 2,
+            "CONNECTIVITY": 3,
+            "PUBLIC_IDENTITY": 4,
+            "PCAP": 5,
+            "DATA_QUALITY": 6,
+        }
+        severity_order = {
+            "WARNING": 1,
+            "NOTICE": 2,
+            "INFO": 3,
+        }
+
+        def _sort_key(o: Observation) -> tuple:
+            return (
+                category_order.get(o.category, 99),
+                severity_order.get(o.severity, 99),
+                o.id,
+                tuple(sorted(o.related_entities)),
+                o.title,
+            )
+
+        return sorted(observations, key=_sort_key)
