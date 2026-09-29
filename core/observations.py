@@ -724,3 +724,238 @@ class ObservationEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Rule 7: Socket Observations
     # ──────────────────────────────────────────────────────────────────────────
+    def observe_socket_state(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect listening sockets and process visibility permissions.
+
+        Scope-aware: If sockets was not in collected_sections, returns [].
+        """
+        obs: list[Observation] = []
+
+        # Scope guard: Do not reason about uncollected sockets
+        if collected_sections is not None and "sockets" not in collected_sections:
+            return []
+
+        if not report.sockets:
+            return obs
+
+        # 1. Listening sockets
+        listening = [s for s in report.sockets if getattr(s, "state", "").upper() in ("LISTEN", "LISTENING")]
+        if listening:
+            tcp_listen = sum(1 for s in listening if getattr(s, "protocol", "").upper().startswith("TCP"))
+            udp_listen = sum(1 for s in listening if getattr(s, "protocol", "").upper().startswith("UDP"))
+            ports = sorted({f"{s.local_address}:{s.local_port}" for s in listening})
+            obs.append(
+                Observation(
+                    id="HOST.SOCKET.LISTENING",
+                    category="HOST",
+                    severity="INFO",
+                    confidence="HIGH",
+                    title=f"Local listening sockets observed ({len(listening)})",
+                    summary=f"Observed {len(listening)} local listening socket(s) ({tcp_listen} TCP, {udp_listen} UDP).",
+                    details=f"The host has {len(listening)} listening endpoint(s) open to local or external network connections across protocols TCP ({tcp_listen}) and UDP ({udp_listen}).",
+                    source_sections=["sockets"],
+                    related_entities=ports[:5],
+                    evidence=[
+                        ObservationEvidence(
+                            source="sockets",
+                            field="listening_count",
+                            value=len(listening),
+                            description=f"{len(listening)} sockets in LISTEN state",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        # 2. Process attribution unknown / restricted
+        unknown_procs = [
+            s
+            for s in report.sockets
+            if getattr(s, "pid", None) is None and getattr(s, "process_name", None) is None
+        ]
+        if unknown_procs:
+            entities = sorted({f"{s.local_address}:{s.local_port}" for s in unknown_procs})
+            obs.append(
+                Observation(
+                    id="HOST.SOCKET.PROCESS_UNKNOWN",
+                    category="HOST",
+                    severity="NOTICE",
+                    confidence="HIGH",
+                    title=f"Socket process ownership unmapped ({len(unknown_procs)} sockets)",
+                    summary=f"{len(unknown_procs)} socket entries do not expose process ownership under current OS permissions.",
+                    details="Process attribution (PID and executable name) is restricted by operating system security policies for unprivileged users. Run with administrative or root privileges to view all socket process bindings.",
+                    source_sections=["sockets"],
+                    related_entities=entities[:5],
+                    evidence=[
+                        ObservationEvidence(
+                            source="sockets",
+                            field="unknown_process_count",
+                            value=len(unknown_procs),
+                            description=f"{len(unknown_procs)} sockets without PID or process attribution",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 8: Connectivity Observations
+    # ──────────────────────────────────────────────────────────────────────────
+    def observe_connectivity_state(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect connectivity diagnostic probe results."""
+        obs: list[Observation] = []
+
+        if collected_sections is not None and "connectivity" not in collected_sections:
+            return obs
+
+        if not report.connectivity:
+            return obs
+
+        conn = report.connectivity
+
+        # 1. Gateway probe
+        if conn.gateway:
+            gw = conn.gateway
+            if gw.status == "SUCCESS":
+                latency_str = f"{gw.latency_ms:.1f} ms" if gw.latency_ms is not None else "measured"
+                obs.append(
+                    Observation(
+                        id="CONNECTIVITY.GATEWAY_REACHABLE",
+                        category="CONNECTIVITY",
+                        severity="INFO",
+                        confidence="HIGH",
+                        title=f"Default gateway {gw.target} is reachable",
+                        summary=f"ICMP ping probe to default gateway {gw.target} succeeded (latency: {latency_str}).",
+                        details=f"Round-trip latency to gateway {gw.target} was measured at {latency_str} with 0% packet loss.",
+                        source_sections=["connectivity"],
+                        related_entities=[gw.target] if gw.target else [],
+                        evidence=[
+                            ObservationEvidence(
+                                source="connectivity",
+                                field="gateway.status",
+                                value="SUCCESS",
+                                description=f"Gateway latency: {latency_str}",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+            elif gw.status in ("FAILED", "TIMEOUT"):
+                obs.append(
+                    Observation(
+                        id="CONNECTIVITY.GATEWAY_UNREACHABLE",
+                        category="CONNECTIVITY",
+                        severity="NOTICE",
+                        confidence="HIGH",
+                        title=f"Default gateway {gw.target} probe failed ({gw.status})",
+                        summary=f"Gateway {gw.target} did not respond to ICMP ping probe ({gw.status}).",
+                        details=f"Gateway probe returned {gw.status}. ICMP echo requests may be blocked by a local firewall, gateway ACLs, or the gateway may be non-responsive.",
+                        source_sections=["connectivity"],
+                        related_entities=[gw.target] if gw.target else [],
+                        evidence=[
+                            ObservationEvidence(
+                                source="connectivity",
+                                field="gateway.status",
+                                value=gw.status,
+                                description=gw.details or "Gateway ping did not succeed",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 2. DNS probe
+        if conn.dns:
+            d = conn.dns
+            if d.status == "SUCCESS":
+                latency_str = f"{d.latency_ms:.1f} ms" if d.latency_ms is not None else "measured"
+                obs.append(
+                    Observation(
+                        id="CONNECTIVITY.DNS_AVAILABLE",
+                        category="CONNECTIVITY",
+                        severity="INFO",
+                        confidence="HIGH",
+                        title="External DNS resolution succeeded",
+                        summary=f"DNS query probe succeeded (latency: {latency_str}).",
+                        details=f"DNS queries to configured test hosts resolved successfully in {latency_str}.",
+                        source_sections=["connectivity"],
+                        related_entities=[d.target] if d.target else [],
+                        evidence=[
+                            ObservationEvidence(
+                                source="connectivity",
+                                field="dns.status",
+                                value="SUCCESS",
+                                description=f"DNS latency: {latency_str}",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 3. HTTP probe
+        if conn.internet:
+            http_probe = conn.internet
+            if http_probe.status == "SUCCESS":
+                obs.append(
+                    Observation(
+                        id="CONNECTIVITY.HTTP_AVAILABLE",
+                        category="CONNECTIVITY",
+                        severity="INFO",
+                        confidence="HIGH",
+                        title="Internet HTTP connectivity verified",
+                        summary=f"HTTP probe to {http_probe.target} succeeded (status: {http_probe.http_status or 200}).",
+                        details=f"HTTP reachability check to {http_probe.target} completed successfully with HTTP status {http_probe.http_status or 200}.",
+                        source_sections=["connectivity"],
+                        related_entities=[http_probe.target] if http_probe.target else [],
+                        evidence=[
+                            ObservationEvidence(
+                                source="connectivity",
+                                field="internet.status",
+                                value="SUCCESS",
+                                description=f"HTTP status {http_probe.http_status}",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 4. IPv6 probe
+        if conn.ipv6 and conn.ipv6.status in ("FAILED", "TIMEOUT", "UNAVAILABLE"):
+            obs.append(
+                Observation(
+                    id="CONNECTIVITY.IPV6_NOT_OBSERVED",
+                    category="CONNECTIVITY",
+                    severity="INFO",
+                    confidence="HIGH",
+                    title="IPv6 Internet connectivity not observed",
+                    summary="IPv6 connectivity test did not establish external connectivity.",
+                    details=f"IPv6 connectivity test status was '{conn.ipv6.status}'. External IPv6 routing may not be enabled or supported by the local network or ISP.",
+                    source_sections=["connectivity"],
+                    related_entities=[],
+                    evidence=[
+                        ObservationEvidence(
+                            source="connectivity",
+                            field="ipv6.status",
+                            value=conn.ipv6.status,
+                            description=conn.ipv6.details or "IPv6 probe was not successful",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 9: PCAP Observations
+    # ──────────────────────────────────────────────────────────────────────────
