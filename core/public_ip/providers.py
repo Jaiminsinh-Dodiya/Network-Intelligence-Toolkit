@@ -381,5 +381,3 @@ class ICanHazIpProvider(BasePublicIpProvider):
         except Exception as err:
             logger.debug("Provider %s lookup_ip(version=%d) failed: %s", self.name, version, err)
         return None
-
-# Dynamic URL template formatting

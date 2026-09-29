@@ -289,15 +289,3 @@ class CollectorCoordinator:
             collection_errors["observations"] = str(err)
 
         return report
-
-# Routing and DNS coordinator collection pipeline
-
-# DHCP and Wi-Fi collection pipeline with --wifi flag
-
-# Public IP collection pipeline with --no-internet policy
-
-# Connectivity diagnostic execution pipeline
-
-# Host telemetry collection for --neighbors and --sockets
-
-# PCAP analysis coordinator pipeline (Option I)
