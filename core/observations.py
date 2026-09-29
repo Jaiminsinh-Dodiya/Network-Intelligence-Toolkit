@@ -1291,3 +1291,30 @@ class ObservationEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Suppression & Deduplication Helpers
     # ──────────────────────────────────────────────────────────────────────────
+    def _apply_suppressions(
+        self, observations: list[Observation], report: NetworkIntelligenceReport
+    ) -> list[Observation]:
+        """Suppress contradictory or redundant observations."""
+        obs_ids = {o.id for o in observations}
+        filtered: list[Observation] = []
+
+        # If gateway neighbor matched, suppress missing neighbor
+        has_gw_match = "NETWORK.GATEWAY.NEIGHBOR_MATCH" in obs_ids
+        # If gateway reachable, suppress gateway unreachable
+        has_gw_reachable = "CONNECTIVITY.GATEWAY_REACHABLE" in obs_ids
+
+        # Check IPv6 connectivity probe result
+        v6_conn_success = False
+        if report.connectivity and report.connectivity.ipv6:
+            v6_conn_success = report.connectivity.ipv6.status == "SUCCESS"
+
+        for o in observations:
+            if o.id == "NETWORK.GATEWAY.NEIGHBOR_MISSING" and has_gw_match:
+                continue
+            if o.id == "CONNECTIVITY.GATEWAY_UNREACHABLE" and has_gw_reachable:
+                continue
+            if o.id == "NETWORK.IPV6.CONFIGURED_NO_CONNECTIVITY" and v6_conn_success:
+                continue
+            filtered.append(o)
+
+        return filtered
