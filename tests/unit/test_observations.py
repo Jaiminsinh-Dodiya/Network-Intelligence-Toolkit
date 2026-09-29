@@ -532,3 +532,157 @@ def test_observation_engine_determinism():
 
 
 # ==============================================================================
+# 14. Collection Scope Awareness Tests (Phase 9.1 Hardening)
+# ==============================================================================
+def test_scope_quick_mode_excludes_unrequested_observations():
+    """Verify that quick mode scope suppresses neighbor, socket, and unrequested partial observations."""
+    engine = ObservationEngine()
+    rep = create_minimal_report(
+        neighbors=[],
+        sockets=[],
+        capabilities={
+            "socket_summary": CapabilityEntry(
+                name="socket_summary",
+                description="Socket mapping",
+                status="PARTIAL",
+                reason="Process mapping restricted",
+            ),
+            "neighbor_table": CapabilityEntry(
+                name="neighbor_table",
+                description="ARP table",
+                status="AVAILABLE",
+            ),
+        },
+    )
+
+    quick_scope = {"system", "capabilities", "interfaces", "routing"}
+    obs = engine.analyze(rep, collected_sections=quick_scope)
+    obs_ids = {o.id for o in obs}
+
+    # Must NOT report empty neighbors or unknown socket processes
+    assert "NETWORK.NEIGHBOR.EMPTY" not in obs_ids
+    assert "HOST.SOCKET.PROCESS_UNKNOWN" not in obs_ids
+
+    # Must NOT report DATA.COLLECTION.PARTIAL for socket_summary because sockets was unrequested
+    partial_entities = [ent for o in obs if o.id == "DATA.COLLECTION.PARTIAL" for ent in o.related_entities]
+    assert "socket_summary" not in partial_entities
+
+
+def test_scope_explicit_neighbor_collection_allows_empty_observation():
+    """Verify that when neighbors subsystem is explicitly in scope, empty table is reported."""
+    engine = ObservationEngine()
+    rep = create_minimal_report(
+        neighbors=[],
+        capabilities={
+            "neighbor_table": CapabilityEntry(
+                name="neighbor_table",
+                description="ARP table",
+                status="AVAILABLE",
+            ),
+        },
+    )
+
+    scope_with_neighbors = {"system", "capabilities", "interfaces", "routing", "neighbors"}
+    obs = engine.analyze(rep, collected_sections=scope_with_neighbors)
+    obs_ids = {o.id for o in obs}
+
+    assert "NETWORK.NEIGHBOR.EMPTY" in obs_ids
+
+
+def test_scope_explicit_socket_collection_allows_socket_observations():
+    """Verify that when sockets subsystem is in scope, socket observations are produced."""
+    engine = ObservationEngine()
+    rep = create_minimal_report(
+        sockets=[
+            SocketEntry(protocol="TCP", local_address="0.0.0.0", local_port=80, state="LISTEN", pid=None, process_name=None),
+        ],
+        capabilities={
+            "socket_summary": CapabilityEntry(
+                name="socket_summary",
+                description="Socket mapping",
+                status="PARTIAL",
+                reason="Process mapping restricted",
+            ),
+        },
+    )
+
+    scope_with_sockets = {"system", "capabilities", "interfaces", "routing", "sockets"}
+    obs = engine.analyze(rep, collected_sections=scope_with_sockets)
+    obs_ids = {o.id for o in obs}
+
+    assert "HOST.SOCKET.LISTENING" in obs_ids
+    assert "HOST.SOCKET.PROCESS_UNKNOWN" in obs_ids
+
+    # socket_summary PARTIAL is reported because sockets was in scope
+    partial_entities = [ent for o in obs if o.id == "DATA.COLLECTION.PARTIAL" for ent in o.related_entities]
+    assert "socket_summary" in partial_entities
+
+
+def test_scope_gateway_consistency_requires_neighbor_scope():
+    """Verify NETWORK.GATEWAY.NEIGHBOR_MISSING is suppressed if neighbors was uncollected."""
+    engine = ObservationEngine()
+    rep = create_minimal_report(
+        routing=RoutingInfo(
+            default_ipv4=RouteEntry(destination="0.0.0.0/0", gateway="192.168.1.1", interface="eth0", ip_version=4),
+        ),
+        neighbors=[
+            NeighborEntry(ip_address="192.168.1.50", mac_address="00:11:22:33:44:55", interface="eth0", state="REACHABLE"),
+        ],
+        capabilities={
+            "neighbor_table": CapabilityEntry(name="neighbor_table", description="ARP", status="AVAILABLE"),
+        },
+    )
+
+    # 1. Without neighbors in scope -> Suppressed
+    scope_no_neighbors = {"system", "capabilities", "interfaces", "routing"}
+    obs1 = engine.analyze(rep, collected_sections=scope_no_neighbors)
+    obs_ids1 = {o.id for o in obs1}
+    assert "NETWORK.GATEWAY.NEIGHBOR_MISSING" not in obs_ids1
+
+    # 2. With neighbors in scope -> Reported
+    scope_with_neighbors = {"system", "capabilities", "interfaces", "routing", "neighbors"}
+    obs2 = engine.analyze(rep, collected_sections=scope_with_neighbors)
+    obs_ids2 = {o.id for o in obs2}
+    assert "NETWORK.GATEWAY.NEIGHBOR_MISSING" in obs_ids2
+
+
+def test_scope_failed_collection_does_not_emit_empty_observation():
+    """Verify that a collection error is reported as DATA.COLLECTION.ERROR, not NETWORK.NEIGHBOR.EMPTY."""
+    engine = ObservationEngine()
+    rep = create_minimal_report(
+        neighbors=[],
+        collection_errors={"neighbors": "Command ip neigh failed with exit code 1"},
+        capabilities={
+            "neighbor_table": CapabilityEntry(name="neighbor_table", description="ARP", status="AVAILABLE"),
+        },
+    )
+
+    scope = {"system", "capabilities", "interfaces", "routing", "neighbors"}
+    obs = engine.analyze(rep, collected_sections=scope)
+    obs_ids = {o.id for o in obs}
+
+    assert "NETWORK.NEIGHBOR.EMPTY" not in obs_ids
+    assert "DATA.COLLECTION.ERROR" in obs_ids
+
+
+def test_observation_context_dataclass_input():
+    """Verify ObservationContext dataclass works seamlessly as input to engine.analyze()."""
+    from core.observations import ObservationContext
+
+    engine = ObservationEngine()
+    rep = create_minimal_report(
+        neighbors=[],
+        capabilities={
+            "neighbor_table": CapabilityEntry(name="neighbor_table", description="ARP", status="AVAILABLE"),
+        },
+    )
+
+    ctx = ObservationContext(
+        collected_sections=frozenset({"system", "capabilities", "interfaces", "routing"}),
+        policy_disabled_sections=frozenset(),
+    )
+    obs = engine.analyze(rep, collected_sections=ctx)
+    obs_ids = {o.id for o in obs}
+
+    assert "NETWORK.NEIGHBOR.EMPTY" not in obs_ids
+
