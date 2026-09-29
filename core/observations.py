@@ -552,3 +552,175 @@ class ObservationEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Rule 5: Public Identity Observations
     # ──────────────────────────────────────────────────────────────────────────
+    def observe_public_identity(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect local and public IP configurations for CGNAT and address characteristics."""
+        obs: list[Observation] = []
+
+        if collected_sections is not None and "interfaces" not in collected_sections:
+            return obs
+
+        # Check for RFC 6598 Carrier-Grade NAT (CGNAT) address space (100.64.0.0/10)
+        cgnat_addrs: list[tuple[str, str]] = []
+        ifaces = report.all_interfaces or ([report.selected_interface] if report.selected_interface else [])
+        for iface in ifaces:
+            if not iface:
+                continue
+            for v4 in iface.ipv4:
+                clean_ip = v4.split("/")[0].strip()
+                try:
+                    ip_obj = ipaddress.ip_address(clean_ip)
+                    if ip_obj.version == 4 and ip_obj in RFC6598_NET:
+                        cgnat_addrs.append((clean_ip, iface.name))
+                except ValueError:
+                    pass
+
+        if cgnat_addrs:
+            addr, iface_name = cgnat_addrs[0]
+            obs.append(
+                Observation(
+                    id="NETWORK.PUBLIC_IDENTITY.CGNAT",
+                    category="PUBLIC_IDENTITY",
+                    severity="INFO",
+                    confidence="HIGH",
+                    title="Local IPv4 address is within RFC 6598 Shared Address Space",
+                    summary=f"The selected local IPv4 address {addr} on interface '{iface_name}' is within RFC 6598 Shared Address Space (100.64.0.0/10).",
+                    details=f"The host's interface '{iface_name}' has assigned address {addr}, which belongs to the RFC 6598 Carrier-Grade NAT (CGNAT) allocation. Upstream network address translation is performed before public Internet egress.",
+                    source_sections=["interfaces", "network"],
+                    related_entities=[addr, iface_name],
+                    evidence=[
+                        ObservationEvidence(
+                            source="interfaces",
+                            field="ipv4",
+                            value=addr,
+                            description=f"Interface {iface_name} assigned {addr} in 100.64.0.0/10",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 6: Neighbor Observations
+    # ──────────────────────────────────────────────────────────────────────────
+    def observe_neighbor_state(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect neighbor/ARP table for empty state, routers, and incomplete entries.
+
+        Scope-aware: If neighbors was not in collected_sections, returns [].
+        """
+        obs: list[Observation] = []
+
+        # Scope guard: Do not interpret uncollected neighbors as empty!
+        if collected_sections is not None and "neighbors" not in collected_sections:
+            return []
+
+        # Check if neighbor capability is present
+        has_neighbor_cap = False
+        if report.capabilities:
+            cap = report.capabilities.get("neighbor_table")
+            if cap:
+                has_neighbor_cap = getattr(cap, "status", "") in ("AVAILABLE", "PARTIAL") or (
+                    isinstance(cap, dict) and cap.get("status") in ("AVAILABLE", "PARTIAL")
+                )
+
+        if not has_neighbor_cap and not report.neighbors and collected_sections is None:
+            return obs
+
+        # 1. Executed and empty neighbor table
+        if not report.neighbors:
+            if report.collection_errors and "neighbors" in report.collection_errors:
+                return obs
+            obs.append(
+                Observation(
+                    id="NETWORK.NEIGHBOR.EMPTY",
+                    category="NETWORK",
+                    severity="INFO",
+                    confidence="HIGH",
+                    title="Local neighbor cache is empty",
+                    summary="No neighbor or ARP entries were observed in the host cache.",
+                    details="The operating system neighbor table contains zero entries. This is common when an interface is newly connected, idle, or when the ARP/ND cache was recently flushed.",
+                    source_sections=["neighbors"],
+                    related_entities=[],
+                    evidence=[
+                        ObservationEvidence(
+                            source="neighbors",
+                            field="count",
+                            value=0,
+                            description="0 entries in neighbor cache",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+            return obs
+
+        # 2. Router entries observed
+        router_entries = [n for n in report.neighbors if getattr(n, "is_router", False)]
+        if router_entries:
+            for r in router_entries[:3]:
+                obs.append(
+                    Observation(
+                        id="NETWORK.NEIGHBOR.ROUTER_OBSERVED",
+                        category="NETWORK",
+                        severity="INFO",
+                        confidence="HIGH",
+                        title=f"Neighbor router flag observed for {r.ip_address}",
+                        summary=f"Neighbor entry {r.ip_address} ({r.mac_address}) is marked as a router on interface '{r.interface}'.",
+                        details=f"Operating system neighbor discovery identified {r.ip_address} on interface '{r.interface}' as an active network router.",
+                        source_sections=["neighbors"],
+                        related_entities=[r.ip_address, r.interface] if r.interface else [r.ip_address],
+                        evidence=[
+                            ObservationEvidence(
+                                source="neighbors",
+                                field="is_router",
+                                value=True,
+                                description=f"Router flag True on {r.ip_address} ({r.mac_address})",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 3. Incomplete / Failed neighbor entries
+        incomplete_entries = [
+            n for n in report.neighbors if getattr(n, "state", "").upper() in ("INCOMPLETE", "FAILED")
+        ]
+        if incomplete_entries:
+            ips = [e.ip_address for e in incomplete_entries]
+            obs.append(
+                Observation(
+                    id="NETWORK.NEIGHBOR.INCOMPLETE",
+                    category="NETWORK",
+                    severity="NOTICE",
+                    confidence="HIGH",
+                    title=f"Incomplete neighbor cache entries observed ({len(incomplete_entries)})",
+                    summary=f"Observed {len(incomplete_entries)} neighbor entry/entries with INCOMPLETE or FAILED state: {', '.join(ips[:3])}.",
+                    details=f"Address resolution did not complete for {len(incomplete_entries)} target IP(s). The targets may be offline, non-responsive, or blocked by local packet filters.",
+                    source_sections=["neighbors"],
+                    related_entities=ips[:5],
+                    evidence=[
+                        ObservationEvidence(
+                            source="neighbors",
+                            field="incomplete_count",
+                            value=len(incomplete_entries),
+                            description=f"{len(incomplete_entries)} entries in INCOMPLETE/FAILED state",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 7: Socket Observations
+    # ──────────────────────────────────────────────────────────────────────────
