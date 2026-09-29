@@ -959,3 +959,335 @@ class ObservationEngine:
     # ──────────────────────────────────────────────────────────────────────────
     # Rule 9: PCAP Observations
     # ──────────────────────────────────────────────────────────────────────────
+    def observe_pcap_state(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect PCAP analysis results for traffic characteristics and application metadata."""
+        obs: list[Observation] = []
+
+        if collected_sections is not None and "pcap_analysis" not in collected_sections:
+            return obs
+
+        pcap = report.pcap_analysis or report.pcap
+        if not pcap or getattr(pcap, "status", "") == "UNAVAILABLE":
+            return obs
+
+        # 1. Capture analyzed
+        if getattr(pcap, "status", "") in ("AVAILABLE", "PARTIAL"):
+            pkt_count = getattr(pcap, "packet_count", 0) or getattr(pcap, "analyzed_packets", 0) or 0
+            file_path = getattr(pcap, "file_path", "") or ""
+            dur_val = getattr(pcap, "duration_seconds", 0.0)
+            duration = float(dur_val) if dur_val is not None else 0.0
+            obs.append(
+                Observation(
+                    id="PCAP.ANALYSIS.AVAILABLE",
+                    category="PCAP",
+                    severity="INFO",
+                    confidence="HIGH",
+                    title=f"Capture file analyzed ({pkt_count:,} packets)",
+                    summary=f"Successfully analyzed capture file {Path(file_path).name or file_path} ({pkt_count:,} packets, {duration:.2f}s duration).",
+                    details=f"TShark analyzed {pkt_count:,} packets across {len(pcap.protocols) if hasattr(pcap, 'protocols') else 0} protocol layers.",
+                    source_sections=["pcap_analysis"],
+                    related_entities=[file_path] if file_path else [],
+                    evidence=[
+                        ObservationEvidence(
+                            source="pcap_analysis",
+                            field="packet_count",
+                            value=pkt_count,
+                            description=f"{pkt_count} packets analyzed",
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        # 2. Capture truncated
+        if getattr(pcap, "truncated", False) or getattr(pcap, "status", "") == "PARTIAL":
+            reason = getattr(pcap, "reason", None) or getattr(pcap, "truncation_reason", None) or "Configured packet or output limit reached"
+            obs.append(
+                Observation(
+                    id="PCAP.ANALYSIS.TRUNCATED",
+                    category="PCAP",
+                    severity="NOTICE",
+                    confidence="HIGH",
+                    title="Capture analysis bounded by configured limit",
+                    summary=f"Analysis was truncated: {reason}.",
+                    details=f"Capture processing was halted early to enforce safety resource bounds. Details: {reason}.",
+                    source_sections=["pcap_analysis"],
+                    related_entities=[],
+                    evidence=[
+                        ObservationEvidence(
+                            source="pcap_analysis",
+                            field="truncated",
+                            value=True,
+                            description=reason,
+                        )
+                    ],
+                    status="OBSERVED",
+                )
+            )
+
+        # 3. TCP Retransmissions
+        tcp = getattr(pcap, "tcp_summary", None) or getattr(pcap, "tcp", None)
+        if tcp:
+            retrans = getattr(tcp, "retransmissions", 0) or getattr(tcp, "retransmission_count", 0)
+            if retrans >= self.pcap_retrans_threshold and retrans > 0:
+                obs.append(
+                    Observation(
+                        id="PCAP.TCP.RETRANSMISSIONS",
+                        category="PCAP",
+                        severity="NOTICE",
+                        confidence="HIGH",
+                        title=f"TCP retransmissions observed in capture ({retrans:,})",
+                        summary=f"Observed {retrans:,} TCP retransmission indication(s) in the analyzed capture.",
+                        details=f"TCP retransmission packets were identified ({retrans:,} packets), indicating possible segment loss, out-of-order delivery, or network path congestion.",
+                        source_sections=["pcap_analysis"],
+                        related_entities=[],
+                        evidence=[
+                            ObservationEvidence(
+                                source="pcap_analysis",
+                                field="tcp_summary.retransmissions",
+                                value=retrans,
+                                description=f"{retrans} TCP retransmissions",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+            # 4. TCP Resets
+            resets = getattr(tcp, "rst_flag_count", 0) or getattr(tcp, "rst_count", 0)
+            if resets >= self.pcap_reset_threshold and resets > 0:
+                obs.append(
+                    Observation(
+                        id="PCAP.TCP.RESETS",
+                        category="PCAP",
+                        severity="NOTICE",
+                        confidence="HIGH",
+                        title=f"TCP reset (RST) flags observed in capture ({resets:,})",
+                        summary=f"Observed {resets:,} TCP reset flag indication(s) in the analyzed capture.",
+                        details=f"TCP RST flags were recorded ({resets:,} packets), indicating abruptly closed, refused, or rejected connection attempts.",
+                        source_sections=["pcap_analysis"],
+                        related_entities=[],
+                        evidence=[
+                            ObservationEvidence(
+                                source="pcap_analysis",
+                                field="tcp_summary.rst_flag_count",
+                                value=resets,
+                                description=f"{resets} TCP RST flags",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 5. DNS Unresolved
+        dns_sum = getattr(pcap, "dns_summary", None) or getattr(pcap, "dns", None)
+        if dns_sum:
+            unresolved = getattr(dns_sum, "unresolved_queries", None) or getattr(dns_sum, "unresolved_query_count", 0)
+            if unresolved > 0:
+                obs.append(
+                    Observation(
+                        id="PCAP.DNS.UNRESOLVED",
+                        category="PCAP",
+                        severity="NOTICE",
+                        confidence="HIGH",
+                        title=f"Unresolved DNS queries observed in capture ({unresolved:,})",
+                        summary=f"Observed {unresolved:,} DNS query/queries without corresponding answers in the capture.",
+                        details=f"{unresolved:,} DNS requests were recorded without matching DNS response packets during the capture duration.",
+                        source_sections=["pcap_analysis"],
+                        related_entities=[],
+                        evidence=[
+                            ObservationEvidence(
+                                source="pcap_analysis",
+                                field="dns_summary.unresolved_query_count",
+                                value=unresolved,
+                                description=f"{unresolved} unanswered DNS queries",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 6. HTTP Observed
+        http_sum = getattr(pcap, "http_summary", None) or getattr(pcap, "http", None)
+        if http_sum:
+            req_cnt = getattr(http_sum, "total_requests", 0) or getattr(http_sum, "request_count", 0)
+            resp_cnt = getattr(http_sum, "total_responses", 0) or getattr(http_sum, "response_count", 0)
+            if req_cnt > 0 or resp_cnt > 0:
+                top_hosts = getattr(http_sum, "top_hosts", [])
+                host_names = [h[0] if isinstance(h, (tuple, list)) else str(h) for h in top_hosts[:3]]
+                obs.append(
+                    Observation(
+                        id="PCAP.HTTP.OBSERVED",
+                        category="PCAP",
+                        severity="INFO",
+                        confidence="HIGH",
+                        title=f"HTTP application metadata observed ({req_cnt:,} requests)",
+                        summary=f"Observed {req_cnt:,} plaintext HTTP request(s) and {resp_cnt:,} response(s).",
+                        details=f"Unencrypted HTTP communication was recorded for hosts: {', '.join(host_names) if host_names else 'N/A'}.",
+                        source_sections=["pcap_analysis"],
+                        related_entities=host_names[:5],
+                        evidence=[
+                            ObservationEvidence(
+                                source="pcap_analysis",
+                                field="http_summary.request_count",
+                                value=req_cnt,
+                                description=f"{req_cnt} HTTP requests, {resp_cnt} HTTP responses",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 7. TLS Observed
+        tls_sum = getattr(pcap, "tls_summary", None) or getattr(pcap, "tls", None)
+        if tls_sum:
+            sess_cnt = getattr(tls_sum, "total_sessions", 0) or getattr(tls_sum, "session_count", 0)
+            top_snis = getattr(tls_sum, "top_server_names", []) or getattr(tls_sum, "sni_list", [])
+            if sess_cnt > 0 or top_snis:
+                sni_names = [s[0] if isinstance(s, (tuple, list)) else str(s) for s in top_snis[:3]]
+                obs.append(
+                    Observation(
+                        id="PCAP.TLS.OBSERVED",
+                        category="PCAP",
+                        severity="INFO",
+                        confidence="HIGH",
+                        title=f"TLS encrypted sessions observed ({sess_cnt:,} sessions)",
+                        summary=f"Observed {sess_cnt:,} TLS handshake session(s).",
+                        details=f"TLS handshakes recorded with Server Name Indications: {', '.join(sni_names) if sni_names else 'N/A'}.",
+                        source_sections=["pcap_analysis"],
+                        related_entities=sni_names[:5],
+                        evidence=[
+                            ObservationEvidence(
+                                source="pcap_analysis",
+                                field="tls_summary.session_count",
+                                value=sess_cnt,
+                                description=f"{sess_cnt} TLS sessions observed",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rule 10: Data Quality Observations
+    # ──────────────────────────────────────────────────────────────────────────
+    def observe_data_quality(
+        self,
+        report: NetworkIntelligenceReport,
+        collected_sections: set[str] | None = None,
+    ) -> list[Observation]:
+        """Inspect report collection state, errors, and partial capabilities.
+
+        Scope-aware: Capability partiality is only reported if the subsystem was
+        actually requested/collected in the current execution scope.
+        """
+        obs: list[Observation] = []
+
+        # 1. Collection Errors for requested subsystems
+        if report.collection_errors:
+            for subsystem, err_msg in sorted(report.collection_errors.items()):
+                sec = CAPABILITY_TO_SECTION.get(subsystem, subsystem)
+                if collected_sections is not None and sec not in collected_sections and subsystem not in collected_sections:
+                    # Subsystem was not requested
+                    continue
+                obs.append(
+                    Observation(
+                        id="DATA.COLLECTION.ERROR",
+                        category="DATA_QUALITY",
+                        severity="WARNING",
+                        confidence="HIGH",
+                        title=f"Collection error in subsystem '{subsystem}'",
+                        summary=f"Subsystem '{subsystem}' encountered an error during collection: {err_msg}.",
+                        details=f"Execution error in {subsystem} collector: {err_msg}. Results for this subsystem may be incomplete or unavailable.",
+                        source_sections=[subsystem, "collection_errors"],
+                        related_entities=[subsystem],
+                        evidence=[
+                            ObservationEvidence(
+                                source="collection_errors",
+                                field=subsystem,
+                                value=err_msg,
+                                description=f"Collector error message: {err_msg}",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 2. Policy-disabled collectors (e.g. public_ip disabled by --no-internet)
+        if report.public_ip and getattr(report.public_ip, "status", "") == "DISABLED":
+            if collected_sections is None or "public_ip" in collected_sections:
+                obs.append(
+                    Observation(
+                        id="DATA.COLLECTION.PARTIAL",
+                        category="DATA_QUALITY",
+                        severity="INFO",
+                        confidence="HIGH",
+                        title="Public Internet Identity collection disabled by policy",
+                        summary="Public Internet Identity was disabled by --no-internet flag.",
+                        details="External IP and ASN queries were suppressed in compliance with user request.",
+                        source_sections=["public_ip"],
+                        related_entities=["public_ip"],
+                        evidence=[
+                            ObservationEvidence(
+                                source="public_ip",
+                                field="status",
+                                value="DISABLED",
+                                description="Disabled by --no-internet",
+                            )
+                        ],
+                        status="OBSERVED",
+                    )
+                )
+
+        # 3. Partial capabilities (ONLY for subsystems that were in collected_sections!)
+        if report.capabilities:
+            for cap_name, cap_entry in sorted(report.capabilities.items()):
+                if cap_name == "observations":
+                    continue
+
+                sec_name = CAPABILITY_TO_SECTION.get(cap_name, cap_name)
+                # Scope guard: Do not report PARTIAL for unrequested subsystems!
+                if collected_sections is not None and sec_name not in collected_sections:
+                    continue
+
+                cap_status = getattr(cap_entry, "status", "") or (
+                    cap_entry.get("status", "") if isinstance(cap_entry, dict) else ""
+                )
+                cap_reason = getattr(cap_entry, "reason", None) or (
+                    cap_entry.get("reason") if isinstance(cap_entry, dict) else None
+                )
+                if cap_status == "PARTIAL":
+                    obs.append(
+                        Observation(
+                            id="DATA.COLLECTION.PARTIAL",
+                            category="DATA_QUALITY",
+                            severity="NOTICE",
+                            confidence="HIGH",
+                            title=f"Subsystem '{cap_name}' operating with partial capability",
+                            summary=f"Subsystem '{cap_name}' capability is PARTIAL: {cap_reason or 'Limited visibility'}.",
+                            details=f"Subsystem {cap_name} cannot collect complete telemetry: {cap_reason}.",
+                            source_sections=["capabilities", cap_name],
+                            related_entities=[cap_name],
+                            evidence=[
+                                ObservationEvidence(
+                                    source="capabilities",
+                                    field=f"{cap_name}.status",
+                                    value="PARTIAL",
+                                    description=cap_reason or "Partial capability",
+                                )
+                            ],
+                            status="OBSERVED",
+                        )
+                    )
+
+        return obs
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Suppression & Deduplication Helpers
+    # ──────────────────────────────────────────────────────────────────────────
