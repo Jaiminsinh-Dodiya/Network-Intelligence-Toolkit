@@ -1362,3 +1362,5 @@ class ObservationEngine:
             )
 
         return sorted(observations, key=_sort_key)
+
+# Scope context data structure
